@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Upbit Watch — Documentation</title>
+  <link rel="icon" href="data:," />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ===== Top bar ===== -->
+  <header class="topbar">
+    <button class="hamburger" id="hamburger" aria-label="Toggle navigation">☰</button>
+    <div class="brand">
+      <span class="dot" aria-hidden="true"></span>
+      <div>
+        <div class="title">UPBIT&nbsp;WATCH</div>
+        <div class="subtitle">listing detector · documentation</div>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <span class="pill amber">v1 · localhost</span>
+    <a class="pill" href="http://localhost:8000" target="_blank" rel="noopener">Open dashboard ↗</a>
+  </header>
+
+  <div class="layout">
+
+    <!-- ===== Sidebar ===== -->
+    <aside class="sidebar" id="sidebar">
+      <div class="search-wrap">
+        <span class="icon">🔍</span>
+        <input id="search" type="search" placeholder="Filter sections…" autocomplete="off" />
+      </div>
+
+      <div class="nav-group-label">Get started</div>
+      <nav class="nav">
+        <a href="#overview"><span class="num">1</span> Overview</a>
+        <a href="#prerequisites"><span class="num">2</span> Prerequisites</a>
+        <a href="#install"><span class="num">3</span> Install &amp; setup</a>
+        <a href="#telegram"><span class="num">4</span> Telegram setup</a>
+        <a href="#run"><span class="num">5</span> Running it</a>
+      </nav>
+
+      <div class="nav-group-label">Use it</div>
+      <nav class="nav">
+        <a href="#dashboard"><span class="num">6</span> Using the dashboard</a>
+        <a href="#alerts"><span class="num">7</span> Alerts you'll get</a>
+      </nav>
+
+      <div class="nav-group-label">Under the hood</div>
+      <nav class="nav">
+        <a href="#how-it-works"><span class="num">8</span> How it works</a>
+        <a href="#configuration"><span class="num">9</span> Configuration</a>
+        <a href="#api"><span class="num">10</span> API &amp; WebSocket</a>
+        <a href="#storage"><span class="num">11</span> Storage &amp; events</a>
+      </nav>
+
+      <div class="nav-group-label">Operate</div>
+      <nav class="nav">
+        <a href="#troubleshooting"><span class="num">12</span> Troubleshooting</a>
+        <a href="#going-live"><span class="num">13</span> Going live (VPS)</a>
+      </nav>
+    </aside>
+
+    <div class="backdrop" id="backdrop"></div>
+
+    <!-- ===== Content ===== -->
+    <main class="content">
+      <div class="content-inner">
+
+        <!-- Hero -->
+        <div class="hero">
+          <div class="eyebrow">Localhost control panel</div>
+          <h1>Upbit Watch</h1>
+          <p>
+            A dark control panel that detects <strong>new Upbit listings</strong> the moment they
+            appear and pings your Telegram. One FastAPI process supervises two independent detection
+            loops plus a price-snapshot logger, streaming everything live to a browser dashboard over
+            WebSocket. Built to run on WSL2 Ubuntu for $0 — deployable unchanged to a Seoul VPS later.
+            The dashboard is now <strong>fully user-configurable</strong> — detector behaviour, alerts,
+            appearance, and display — with <strong>light / dark / system</strong> themes and accent colours.
+          </p>
+          <div class="badges">
+            <span class="badge"><b>FastAPI</b> + WebSocket</span>
+            <span class="badge"><b>Loop A</b> markets · 1s</span>
+            <span class="badge"><b>Loop B</b> announcements · 8s</span>
+            <span class="badge"><b>Phase 0</b> price snapshots</span>
+            <span class="badge"><b>SQLite</b> WAL · survives restarts</span>
+            <span class="badge"><b>Telegram</b> alerts</span>
+            <span class="badge"><b>Light / Dark</b> theming + accents</span>
+            <span class="badge"><b>Fully configurable</b> · hybrid persistence</span>
+          </div>
+        </div>
+
+        <!-- 1. Overview -->
+        <section class="doc" id="overview" data-title="overview big picture architecture two loops phase 0">
+          <h2><span class="sec-num">01</span> Overview</h2>
+          <p class="lede">What Upbit Watch is and how its pieces fit together.</p>
+
+          <p>
+            Upbit Watch is <strong>one FastAPI process</strong> supervising <strong>two independent
+            async detection loops</strong>, with everything pushed live to a browser dashboard over a
+            WebSocket. Two design facts make it reliable:
+          </p>
+          <ul>
+            <li>
+              <strong>Seed-silent + dedup.</strong> On first run each loop records everything that
+              <em>already</em> exists and sends nothing. After that it alerts <strong>only</strong> on
+              genuinely new items. The "already seen" set lives in SQLite, so it
+              <strong>survives restarts</strong> — no false alert storm after a reboot.
+            </li>
+            <li>
+              <strong>One supervisor, two loops.</strong> Start / Stop / Restart (and autostart) control
+              both loops together; each loop is an independent <code>asyncio.Task</code> whose every poll
+              is wrapped in try/except, so a network blip can never crash the process.
+            </li>
+          </ul>
+
+          <div class="diagram" aria-label="Architecture diagram">
+            <div class="flow">
+              <div class="flow-row">
+                <div class="node a">Loop A — DetectorEngine <small>Upbit market/all · every 1s</small></div>
+                <span class="arrow">→</span>
+                <div class="node bus">EventBus <small>async pub/sub</small></div>
+                <span class="arrow">→</span>
+                <div class="fan">
+                  <div class="node sink">/ws → Browser dashboard</div>
+                  <div class="node sink">Telegram (notify.py)</div>
+                  <div class="node sink">SQLite state.db (WAL)</div>
+                </div>
+              </div>
+              <div class="flow-row">
+                <div class="node b">Loop B — NoticePoller <small>Upbit announcements · every 8s</small></div>
+                <span class="arrow">↗</span>
+              </div>
+              <div class="flow-row">
+                <div class="node">Phase 0 <small>on each new listing → Bybit / Binance snapshots</small></div>
+                <span class="arrow">↗</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="cards">
+            <div class="fcard"><div class="fic">🎯</div><h4>Loop A — markets</h4><p>Polls the tradable-market list every second. Primary, rock-solid signal.</p></div>
+            <div class="fcard"><div class="fic">📢</div><h4>Loop B — announcements</h4><p>Polls the notice feed every 8s. Early warning — often fires <em>before</em> Loop A.</p></div>
+            <div class="fcard"><div class="fic">📈</div><h4>Phase 0 — snapshots</h4><p>Captures price at +0/10/30/60s/5m on Bybit + Binance to measure the pump.</p></div>
+            <div class="fcard"><div class="fic">🖥️</div><h4>Live dashboard</h4><p>Status, feeds, logs, markets table, and chart — all updating over WebSocket.</p></div>
+          </div>
+        </section>
+        <hr class="section-divider" />
+
+        <!-- 2. Prerequisites -->
+        <section class="doc" id="prerequisites" data-title="prerequisites requirements wsl python telegram network">
+          <h2><span class="sec-num">02</span> Prerequisites</h2>
+          <p class="lede">What you need before installing.</p>
+          <ul>
+            <li><strong>WSL2 Ubuntu</strong> (24.04) with <strong>Python 3.12</strong> — verify with <code>python3 --version</code>.</li>
+            <li>A <strong>Telegram bot token + chat ID</strong> (see <a href="#telegram">§4</a>).</li>
+            <li><strong>Outbound internet only</strong> — no port-forwarding or firewall changes. Upbit + Bybit must be reachable; Binance is optional (it's intermittently geo-blocked and treated as best-effort).</li>
+          </ul>
+          <div class="callout note">
+            <span class="ic">💡</span>
+            <p>Why WSL2 and not native Windows Python? Clean Linux async networking, and it's the
+            <strong>same OS as the eventual Seoul VPS</strong> — so the code you build locally deploys unchanged.</p>
+          </div>
+        </section>
+        <hr class="section-divider" />
+
+        <!-- 3. Install -->
+        <section class="doc" id="install" data-title="install setup venv virtualenv pip bootstrap dependencies requirements">
+          <h2><span class="sec-num">03</span> Install &amp; setup</h2>
+          <p class="lede">Get the code into WSL and build the virtual environment.</p>
+
+          <h3>1 · Project directory</h3>
+          <div class="code">
+            <div class="code-head"><span>bash</span><button class="copy-btn">Copy</button></div>
+            <pre><code>mkdir -p ~/upbit-bot &amp;&amp; cd ~/upbit-bot   # already created on this machine</code></pre>
+          </div>
+
+          <h3>2 · Virtual environment (with the pip bootstrap)</h3>
+          <p>
+            On this machine <code>python3.12-venv</code>/<code>ensurepip</code> is <strong>not</strong>
+            installed and <code>sudo</code> needs a password — so the venv is created
+            <strong>without pip</strong>, then pip is bootstrapped manually:
+          </p>
+          <div class="code">
+            <div class="code-head"><span>bash</span><button class="copy-btn">Copy</button></div>
+            <pre><code>python3 -m venv --without-pip .venv
+curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+.venv/bin/python /tmp/get-pip.py</code></pre>
+          </div>
+          <div class="callout tip">
+            <span class="ic">✅</span>
+            <p>If you ever have <code>sudo</code> access, the simpler path is
+            <code>sudo apt install -y python3.12-venv python3-pip</code> then a normal
+            <code>python3 -m venv .venv</code>.</p>
+          </div>
+
+          <h3>3 · Dependencies</h3>
+          <div class="code">
+            <div class="code-head"><span>bash</span><button class="copy-btn">Copy</button></div>
+            <pre><code>.venv/bin/python -m pip install -r requirements.txt
+# installs: fastapi, uvicorn[standard], aiohttp, python-dotenv</code></pre>
+          </div>
+          <div class="callout warn">
+            <span class="ic">⚠️</span>
+            <p>Always invoke Python/pip as <code>.venv/bin/python -m …</code> — because the venv was
+            bootstrapped manually, calling a bare <code>pip</code> may hit the wrong interpreter.</p>
+          </div>
+        </section>
+        <hr class="section-divider" />
+
+        <!-- 4. Telegram -->
+        <section class="doc" id="telegram" data-title="telegram setup botfather token chat id env secrets">
+          <h2><span class="sec-num">04</span> Telegram setup</h2>
+          <p class="lede">Two values — a bot token and your chat ID.</p>
+          <ol>
+            <li>In Telegram, message <strong>@BotFather</strong> → <code>/newbot</code> → copy the <strong>token</strong> (<code>123456:ABC...</code>).</li>
+            <li>Send your new bot any message, then open
+              <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code> and copy your numeric <strong>chat id</strong>.</li>
+            <li>Put them in <code>~/upbit-bot/.env</code>:</li>
+          </ol>
+          <div class="code">
+            <div class="code-head"><span>.env</span><button class="copy-btn">Copy</button></div>
+            <pre><code>TELEGRAM_BOT_TOKEN=123456:ABC...
+TELEGRAM_CHAT_ID=987654321</code></pre>
+          </div>
+          <p>
+            …or just paste them into the dashboard <strong>Settings → Telegram</strong> and click
+            <strong>Save</strong>. Verify with <strong>Settings → Send test message</strong> — you should
+            get a ✅ instantly.
+          </p>
+          <div class="callout danger">
+            <span class="ic">🔒</span>
+            <p><code>.env</code> is git-ignored — <strong>never commit it</strong>. The Settings GET
+            endpoint never returns the token, only whether it's configured.</p>
+          </div>
+        </section>
+        <hr class="section-divider" />
+
+        <!-- 5. Run -->
+        <section class="doc" id="run" data-title="run running tmux uvicorn autostart reset stop start localhost port 8000">
+          <h2><span class="sec-num">05</span> Running it</h2>
+          <p class="lede">Start the server, then open the dashboard in your browser.</p>
+
+          <div class="code">
+            <div class="code-head"><span>bash</span><button class="copy-btn">Copy</button></div>
+            <pre><code>cd ~/upbit-bot
+tmux new -s upbit ./run.sh        # starts uvicorn on 127.0.0.1:8000
+# detach:   Ctrl-b then d
+# reattach: tmux attach -t upbit
+# stop:     tmux kill-session -t upbit</code></pre>
+          </div>
+          <p>
+            The raw command behind <code>run.sh</code> is:
+          </p>
+          <div class="code">
+            <div class="code-head"><span>bash</span><button class="copy-btn">Copy</button></div>
+            <pre><code>.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8000</code></pre>
+          </div>
+          <p>
+            Then open <a href="http://localhost:8000" target="_blank" rel="noopener"><strong>http://localhost:8000</strong></a>
+            in your Windows browser — WSL2 forwards localhost. Press <strong>Start</strong>: the first
+            run seeds existing markets silently; afterward it alerts only on genuinely new ones.
+          </p>
+
+          <h3>Autostart</h3>
+          <p>
+            With <code>"autostart": true</code> in <code>config.json</code> (the default), both detectors
+            arm themselves the instant the app launches — so after a reboot you just relaunch and it's
+            already watching. Set it to <code>false</code> to press <strong>Start</strong> yourself.
+          </p>
+
+          <h3>Reset to a clean slate</h3>
+          <div class="code">
+            <div class="code-head"><span>bash</span><button class="copy-btn">Copy</button></div>
+            <pre><code>rm state.db*        # the * also removes the WAL sidecar files
+# next Start re-seeds silently from scratch</code></pre>
+          </div>
+
+          <div class="callout warn">
+            <span class="ic">⚠️</span>
+            <p><strong>Laptop sleep/hibernate kills WSL and the bot.</strong> For long Phase 0 runs:
+            plug in and set Windows power to "never sleep." If keeping it awake for weeks is impractical,
+            that's the cue to move to a free Oracle Cloud Seoul box.</p>
+          </div>
+        </section>
+        <hr class="section-divider" />
+
+        <!-- 6. Dashboard -->
+        <section class="doc" id="dashboard" data-title="dashboard usage tabs live announce markets phase 0 settings top bar status configurable theme light dark appearance accent density favorites quiet hours">
+          <h2><span class="sec-num">06</span> Using the dashboard</h2>
+          <p class="lede">A tour of every control and panel.</p>
+
+          <h3>Top bar</h3>
+          <p>
+            <code>Start</code> / <code>Stop</code> / <code>Restart</code> control <em>both</em> loops
+            together. The green dot pulses when running; the <code>live</code> pill shows the WebSocket
+            is connected; the gear opens <strong>Settings</strong>.
+          </p>
+
+          <h3>Status card (left)</h3>
+          <p>
+            Uptime, last poll time, poll latency, markets tracked, total polls, and errors. Below it a
+            <strong>Loop B</strong> panel shows announcements seen, listings detected, and Loop B errors.
+          </p>
+
+          <h3>Tabs</h3>
+          <div class="cards">
+            <div class="fcard"><div class="fic">⚡</div><h4>Live</h4><p>New-market feed (Loop A) on the left, a streaming log console on the right. A new listing flashes in and raises a toast.</p></div>
+            <div class="fcard"><div class="fic">📢</div><h4>Announce</h4><p>Loop B feed. Listing notices are highlighted amber with a ticker badge + <code>listing</code> tag; delisting/caution notices are muted. Click any card to open the official notice.</p></div>
+            <div class="fcard"><div class="fic">📋</div><h4>Markets</h4><p>Searchable, paginated table of every tracked market (type e.g. <code>KRW-</code> to filter). <strong>Star</strong> a market to pin it to the top.</p></div>
+            <div class="fcard"><div class="fic">📈</div><h4>Phase 0</h4><p>Price-snapshot chart. Pick a market and <strong>Refresh</strong>, or hit <strong>Simulate listing</strong> to fire a fake <code>SIM-BTC → BTCUSDT</code> through the whole pipeline.</p></div>
+          </div>
+
+          <h3>Settings (panel)</h3>
+          <p>
+            The gear opens a <strong>six-section settings panel</strong> with a left rail. It uses
+            <strong>hybrid persistence</strong>: controls that affect the bot save to <code>config.json</code>
+            and apply at runtime (no restart); personal UI preferences save to your browser
+            (<code>localStorage</code>). Each control is tagged <em>“affects the bot”</em> or <em>“this browser”</em>.
+          </p>
+          <div class="cards">
+            <div class="fcard"><div class="fic">🛰️</div><h4>Detector</h4><p>Loop A / Loop B poll intervals, autostart, Phase 0 offsets &amp; snapshot sources (Bybit/Binance), and the Loop B listing/exclude keywords.</p></div>
+            <div class="fcard"><div class="fic">🔔</div><h4>Alerts</h4><p>Choose which events fire a Telegram alert (listings, announcements, errors), set <strong>quiet hours</strong>, and tune toast duration/sound/which events pop a toast.</p></div>
+            <div class="fcard"><div class="fic">🎨</div><h4>Appearance</h4><p><strong>Light / Dark / System</strong> theme, five accent colours, comfortable/compact density, and small/base/large font scale — applied instantly with no flash on reload.</p></div>
+            <div class="fcard"><div class="fic">🧩</div><h4>Display</h4><p>Time format (local/UTC/relative), number formatting, table page size, default tab, and show/hide of individual tabs &amp; sidebar cards.</p></div>
+            <div class="fcard"><div class="fic">✈️</div><h4>Telegram</h4><p>Bot token + chat id with a <strong>Send test message</strong> button. The token is write-only — the API never echoes it back.</p></div>
+            <div class="fcard"><div class="fic">↩️</div><h4>Reset</h4><p>One click to reset appearance &amp; display preferences (this browser), or to restore all bot settings to their defaults.</p></div>
+          </div>
+        </section>
+        <hr class="section-divider" />
+
+        <!-- 7. Alerts -->
+        <section class="doc" id="alerts" data-title="alerts telegram notifications new market listing announcement">
+          <h2><span class="sec-num">07</span> Alerts you'll receive</h2>
+          <p class="lede">Two Telegram message shapes.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Source</th><th>Message</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><strong>Loop A</strong><br><span style="color:var(--sub)">market live</span></td>
+                  <td><code>🚨 UPBIT NEW MARKET: KRW-XXX</code> + name + UTC timestamp</td>
+                </tr>
+                <tr>
+                  <td><strong>Loop B</strong><br><span style="color:var(--sub)">announcement</span></td>
+                  <td><code>📢 UPBIT LISTING ANNOUNCEMENT: XXX</code> + the Korean title + a link to the notice</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Loop B usually fires first; Loop A confirms the market is actually tradable.</p>
+        </section>
+        <hr class="section-divider" />
+
+        <!-- 8. How it works -->
+        <section class="doc" id="how-it-works" data-title="how it works internals components detector engine notice poller phase0 eventbus websocket functions">
+          <h2><span class="sec-num">08</span> How it works</h2>
+          <p class="lede">The components, the data flow, and what each file/function does.</p>
+
+          <h3>Components — which file does what</h3>
+          <div class="filelist">
+            <div class="fileitem"><div class="fname">app.py</div><div class="fdesc">FastAPI app: REST + WebSocket, wires everything, autostart. Key pieces: <b>lifespan</b>, <b>/api/*</b>, <b>/ws</b>, <b>persist_env</b>.</div></div>
+            <div class="fileitem"><div class="fname">detector.py</div><div class="fdesc"><b>Loop A</b> engine + the shared <b>EventBus</b>. Classes: <b>DetectorEngine</b>, <b>EventBus</b>.</div></div>
+            <div class="fileitem"><div class="fname">notice.py</div><div class="fdesc"><b>Loop B</b> announcement poller. Pieces: <b>NoticePoller</b>, <b>parse_notice</b>.</div></div>
+            <div class="fileitem"><div class="fname">phase0.py</div><div class="fdesc">Price-snapshot logger after a listing. Class: <b>Phase0</b>.</div></div>
+            <div class="fileitem"><div class="fname">notify.py</div><div class="fdesc">Telegram sender (raw Bot API). Class: <b>Telegram</b>.</div></div>
+            <div class="fileitem"><div class="fname">alerts.py</div><div class="fdesc">Alert gating — per-event flags + quiet hours. Function: <b>alert_allowed</b>.</div></div>
+            <div class="fileitem"><div class="fname">static/index.html</div><div class="fdesc">Dashboard markup (Alpine templates). Tailwind + Alpine.js + Chart.js + Lucide via CDN — no build step.</div></div>
+            <div class="fileitem"><div class="fname">static/app.js</div><div class="fdesc">All dashboard logic + the theme/preferences store (localStorage). Function: <b>app()</b>.</div></div>
+            <div class="fileitem"><div class="fname">static/theme.css</div><div class="fdesc">CSS-variable theme system: light/dark palettes, accents, density, font scale.</div></div>
+            <div class="fileitem"><div class="fname">config.json</div><div class="fdesc">Server-side tunables: intervals, autostart, Phase 0 offsets/sources, keywords, alert rules, quiet hours.</div></div>
+            <div class="fileitem"><div class="fname">.env</div><div class="fdesc">Secrets: Telegram token + chat id.</div></div>
+            <div class="fileitem"><div class="fname">state.db</div><div class="fdesc">SQLite store (WAL): <b>seen</b>, <b>listings</b>, <b>notices</b>, <b>snapshots</b>.</div></div>
+          </div>
+
+          <h3>The core data flow — "a new coin is detected"</h3>
+          <p>This is the alert fan-out, the heart of the system. Everything is decoupled through the
+            <strong>EventBus</strong>: detectors <code>publish()</code> events, the WebSocket endpoint
+            <code>subscribe()</code>s and forwards them — detectors never know about the browser.</p>
+          <div class="diagram">
+            <div class="flow">
+              <div class="node" style="align-self:flex-start">new market / announcement detected</div>
+              <div class="fan">
+                <div class="flow-row"><span class="arrow">├▶</span><div class="node sink">write to SQLite (seen/listings or notices) <small>dedup memory, survives restart</small></div></div>
+                <div class="flow-row"><span class="arrow">├▶</span><div class="node sink">engine.log(…) → EventBus "log" → dashboard Logs console</div></div>
+                <div class="flow-row"><span class="arrow">├▶</span><div class="node sink">EventBus "listing"/"notice" → dashboard feed + toast</div></div>
+                <div class="flow-row"><span class="arrow">├▶</span><div class="node sink">Telegram.send(…) → your phone</div></div>
+                <div class="flow-row"><span class="arrow">└▶</span><div class="node sink">Phase0.schedule(market) <small>Loop A only → snapshots at +0/10/30/60s/5m</small></div></div>
+              </div>
+            </div>
+          </div>
+
+          <h3>8.1 · Loop A — market detection <code>(detector.py → DetectorEngine)</code></h3>
+          <ul>
+            <li><code>_run()</code> opens one <code>aiohttp</code> session and loops every <code>poll_interval</code> (default <strong>1s</strong>): GET <code>market/all</code>, measure latency, count markets.</li>
+            <li><strong>First ever run</strong> (empty <code>seen</code> table): bulk-insert every current market and log "Seeded N markets silently" — <strong>no alerts</strong>.</li>
+            <li><strong>Afterwards:</strong> <code>new = current_markets − seen</code>. For each new market call <code>_handle_new()</code>.</li>
+            <li><code>_handle_new()</code> = the fan-out: insert into <code>seen</code> + <code>listings</code>, log an <code>alert</code>, publish a <code>listing</code> event, send the Telegram alert, and <code>phase0.schedule(market)</code>.</li>
+            <li>Every poll calls <code>publish_status()</code> so the dashboard's uptime/latency/markets tick live. The whole poll body is wrapped in try/except — a blip increments <code>error_count</code> and is logged, but the loop keeps going.</li>
+            <li><code>simulate_listing()</code> is a dev hook (<code>/api/simulate</code>) that forces a fake <code>SIM-BTC</code> through the pipeline (mapped to <code>BTCUSDT</code> so Phase 0 gets real prices).</li>
+          </ul>
+
+          <h3>8.2 · Loop B — announcement detection <code>(notice.py → NoticePoller)</code></h3>
+          <ul>
+            <li>Polls the announcements API every <code>poll_interval_notice</code> (default <strong>8s</strong>) with a <strong>browser User-Agent</strong> (the endpoint is behind Cloudflare). Dedup key is the announcement <strong>id</strong>; same seed-silent-then-alert logic, stored in <code>notices</code>.</li>
+            <li><code>parse_notice(title)</code> classifies:
+              <ul>
+                <li><strong>Ticker</strong> = first <code>(UPPERCASE)</code> group, e.g. <code>에스피엑스6900(SPX) …</code> → <code>SPX</code>.</li>
+                <li><strong>is_listing</strong> = has a ticker <em>and</em> the title contains a listing phrase (<code>거래지원</code>, <code>디지털 자산 추가</code>, <code>신규 상장</code>, <code>마켓 추가</code>) <em>and</em> does <em>not</em> contain <code>종료</code>/<code>폐지</code>/<code>유의</code> (delisting/caution). So <code>OXT 거래지원 종료</code> and <code>KERNEL 거래 유의</code> are correctly excluded.</li>
+              </ul>
+            </li>
+            <li><code>_handle()</code> publishes a <code>notice</code> event and, <strong>only for listings</strong>, sends a Telegram alert with a link. Cloudflare <code>429</code>s are caught, counted, logged — Loop A stays your reliable signal. Loop B usually fires <strong>before</strong> Loop A.</li>
+          </ul>
+
+          <h3>8.3 · Phase 0 — price snapshots <code>(phase0.py → Phase0)</code></h3>
+          <ul>
+            <li><code>schedule(market)</code> derives the symbol: <code>KRW-XXX</code> → base <code>XXX</code> → <code>XXXUSDT</code>, and spawns an async task.</li>
+            <li><code>_collect()</code> waits to each offset <strong>+0 / 10 / 30 / 60 s / 5 m</strong> and fetches the price from <strong>Bybit</strong> (primary) and <strong>Binance</strong> (best-effort), writing both to <code>snapshots</code> and publishing a <code>snapshot</code> event for the live chart.</li>
+            <li>If a source fails (e.g. Binance geo-blocked), that value is stored <code>NULL</code> — no crash, the chart just shows a gap. Purpose: measure how big/fast the post-listing move is <em>for your latency</em>.</li>
+          </ul>
+
+          <h3>8.4 · EventBus + WebSocket <code>(detector.py, app.py /ws)</code></h3>
+          <ul>
+            <li><code>EventBus</code> is a tiny pub/sub: <code>subscribe()</code> returns an <code>asyncio.Queue</code>; <code>publish(event)</code> does a non-blocking <code>put_nowait</code> into every subscriber's queue (drops if a slow client's queue is full, so one stuck browser can't stall the detectors).</li>
+            <li><code>/ws</code> accepts the socket, subscribes, sends an initial <code>status</code>, then forwards every event until the client disconnects. Event types: <code>status</code>, <code>log</code>, <code>listing</code>, <code>notice</code>, <code>snapshot</code>.</li>
+          </ul>
+
+          <h3>8.5 · Telegram <code>(notify.py → Telegram)</code></h3>
+          <ul>
+            <li><code>send(text)</code> POSTs to the raw Bot API <code>sendMessage</code> via <code>aiohttp</code>. <code>configured()</code> guards missing creds (returns an error dict instead of throwing). Token/chat-id are <strong>mutable at runtime</strong> so the Settings drawer can update them without a restart. <code>/api/telegram/test</code> sends a one-off message.</li>
+          </ul>
+
+          <h3>8.6 · Control &amp; lifecycle <code>(app.py lifespan, start/stop/restart)</code></h3>
+          <ul>
+            <li><code>start()</code> launches Loop A <strong>and</strong> <code>notice_poller.start()</code>; <code>stop()</code> cancels both cleanly; <code>restart()</code> = stop then start.</li>
+            <li><strong>Autostart:</strong> the FastAPI <code>lifespan</code> hook calls <code>engine.start()</code> on boot when <code>config.autostart</code> is true and <code>engine.stop()</code> on shutdown — a reboot + relaunch comes up already watching.</li>
+          </ul>
+
+          <h3>8.7 · Persistence &amp; dedup <code>(state.db, WAL)</code></h3>
+          <ul>
+            <li>The DB opens in <strong>WAL mode</strong> with a 3s <code>busy_timeout</code>, so the three concurrent writers (Loop A 1/s, Loop B, Phase 0) never hit "database is locked." Because dedup lives on disk, restarts don't re-alert — verified against 752 existing markets.</li>
+          </ul>
+        </section>
+        <hr class="section-divider" />
+
+        <!-- 9. Configuration -->
+        <section class="doc" id="configuration" data-title="configuration config.json env poll interval autostart phase0 offsets sources keywords alerts quiet hours localstorage preferences reference">
+          <h2><span class="sec-num">09</span> Configuration</h2>
+          <p class="lede">Server-side tunables in <code>config.json</code>, secrets in <code>.env</code>, and personal UI preferences in your browser.</p>
+
+          <h4><code>config.json</code></h4>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Key</th><th>Default</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>poll_interval</code></td><td><code>1.0</code></td><td>Loop A seconds between polls (1/s is within Upbit's limit)</td></tr>
+                <tr><td><code>poll_interval_notice</code></td><td><code>8.0</code></td><td>Loop B seconds between polls (keep ≥3s to avoid Cloudflare 429)</td></tr>
+                <tr><td><code>autostart</code></td><td><code>true</code></td><td>Arm both loops automatically when the app launches</td></tr>
+                <tr><td><code>phase0_offsets</code></td><td><code>[0,10,30,60,300]</code></td><td>Seconds after a listing at which Phase 0 snapshots the price</td></tr>
+                <tr><td><code>phase0_sources</code></td><td><code>{bybit,binance}</code></td><td>Which exchanges Phase 0 queries (each on/off)</td></tr>
+                <tr><td><code>notice_keywords</code></td><td><code>{listing,exclude}</code></td><td>Loop B title phrases marking a listing vs. delisting/caution</td></tr>
+                <tr><td><code>alert_on_listing</code> · <code>_notice</code> · <code>_error</code></td><td><code>true·true·false</code></td><td>Which events send a Telegram alert</td></tr>
+                <tr><td><code>quiet_hours</code></td><td><code>{enabled,start,end}</code></td><td>Suppress Telegram alerts during a daily window (server local time)</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h4><code>.env</code></h4>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>TELEGRAM_BOT_TOKEN</code></td><td>Bot token from @BotFather</td></tr>
+                <tr><td><code>TELEGRAM_CHAT_ID</code></td><td>Your numeric chat id</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h4>Browser preferences <code>(localStorage)</code></h4>
+          <p>
+            Per-browser UI preferences are stored under the key <code>upbitwatch.prefs</code> and never
+            touch the server: theme/accent/density/font scale, default tab, which tabs &amp; sidebar cards
+            are shown, time &amp; number format, table page size, pinned market favourites, and toast
+            duration/sound/events. Use <strong>Settings → Reset</strong> (or clear the key) to restore defaults.
+          </p>
+        </section>
+        <hr class="section-divider" />
+
+        <!-- 10. API -->
+        <section class="doc" id="api" data-title="api reference rest endpoints websocket start stop status listings notices markets logs settings simulate snapshots">
+          <h2><span class="sec-num">10</span> API &amp; WebSocket</h2>
+          <p class="lede">All under <code>http://localhost:8000</code>. Interactive docs at <code>/docs</code>.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+              <tbody>
+                <tr><td><span class="m post">POST</span></td><td><code>/api/start</code> <code>/api/stop</code> <code>/api/restart</code></td><td>control both loops</td></tr>
+                <tr><td><span class="m get">GET</span></td><td><code>/api/status</code></td><td>full status (incl. nested <code>loop_b</code>)</td></tr>
+                <tr><td><span class="m get">GET</span></td><td><code>/api/listings</code></td><td>detected markets (Loop A)</td></tr>
+                <tr><td><span class="m get">GET</span></td><td><code>/api/notices</code></td><td>announcements (Loop B)</td></tr>
+                <tr><td><span class="m get">GET</span></td><td><code>/api/markets</code></td><td>all tracked markets</td></tr>
+                <tr><td><span class="m get">GET</span></td><td><code>/api/logs</code></td><td>recent log lines</td></tr>
+                <tr><td><span class="m get">GET</span><span class="m put">PUT</span></td><td><code>/api/settings</code></td><td>read/update all server tunables (intervals, autostart, Phase 0, keywords, alert rules, quiet hours) + Telegram (token write-only)</td></tr>
+                <tr><td><span class="m post">POST</span></td><td><code>/api/telegram/test</code></td><td>send a test Telegram message</td></tr>
+                <tr><td><span class="m post">POST</span></td><td><code>/api/simulate</code></td><td>dev: fire a fake listing (SIM-BTC)</td></tr>
+                <tr><td><span class="m get">GET</span></td><td><code>/api/snapshots/markets</code></td><td>markets that have Phase 0 snapshots (most-recent first)</td></tr>
+                <tr><td><span class="m get">GET</span></td><td><code>/api/listings/{market}/snapshots</code></td><td>Phase 0 price points</td></tr>
+                <tr><td><span class="m ws">WS</span></td><td><code>/ws</code></td><td>live status / listing / notice / log / snapshot events</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <hr class="section-divider" />
+
+        <!-- 11. Storage & events -->
+        <section class="doc" id="storage" data-title="storage state.db tables seen listings notices snapshots events websocket types">
+          <h2><span class="sec-num">11</span> Storage &amp; events</h2>
+          <p class="lede">Four SQLite tables and five WebSocket event types.</p>
+
+          <h4>Tables <code>(state.db)</code></h4>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Table</th><th>Columns</th><th>Purpose</th></tr></thead>
+              <tbody>
+                <tr><td><code>seen</code></td><td><code>market, ts</code></td><td>Loop A dedup — every market ever observed</td></tr>
+                <tr><td><code>listings</code></td><td><code>market, english, korean, detected_at</code></td><td>Loop A detected new markets</td></tr>
+                <tr><td><code>notices</code></td><td><code>id, title, ticker, category, is_listing, listed_at, detected_at</code></td><td>Loop B announcements</td></tr>
+                <tr><td><code>snapshots</code></td><td><code>id, market, source, t_offset, price, ts</code></td><td>Phase 0 price points (Bybit/Binance)</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h4>Events <code>(WebSocket /ws)</code></h4>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>type</th><th>Emitted when</th><th>Payload (data)</th></tr></thead>
+              <tbody>
+                <tr><td><code>status</code></td><td>each poll, start/stop</td><td>full status incl. nested <code>loop_b</code></td></tr>
+                <tr><td><code>log</code></td><td>any log line</td><td><code>{ts, level, msg}</code> (level: info/alert/error)</td></tr>
+                <tr><td><code>listing</code></td><td>Loop A finds a new market</td><td><code>{market, english, korean, detected_at}</code></td></tr>
+                <tr><td><code>notice</code></td><td>Loop B finds a new announcement</td><td><code>{id, title, ticker, is_listing, listed_at, …}</code></td></tr>
+                <tr><td><code>snapshot</code></td><td>a Phase 0 price point is captured</td><td><code>{market, t_offset, bybit, binance, ts}</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <hr class="section-divider" />
+
+        <!-- 12. Troubleshooting -->
+        <section class="doc" id="troubleshooting" data-title="troubleshooting problems 429 cloudflare binance blocked blank localhost laptop sleep reset">
+          <h2><span class="sec-num">12</span> Troubleshooting</h2>
+          <p class="lede">The common situations and what to do.</p>
+
+          <h4>Loop B error count climbing / HTTP 429</h4>
+          <p>The announcement API is Cloudflare-fronted and rate-limits residential IPs. Raise the
+            <strong>Loop B poll interval</strong> in Settings (e.g. 10–15s). Loop A is unaffected and
+            remains your reliable signal.</p>
+
+          <h4>Phase 0 Binance values are blank</h4>
+          <p>Binance is intermittently blocked from this network; Bybit values still fill in. This is
+            expected and non-fatal — the chart just shows a gap.</p>
+
+          <h4>Browser can't reach localhost:8000</h4>
+          <p>Make sure uvicorn is still running (<code>tmux attach -t upbit</code>) and that it bound to
+            <code>127.0.0.1:8000</code>.</p>
+
+          <h4>Bot went quiet after closing the laptop</h4>
+          <p>WSL was suspended on sleep. Relaunch — autostart re-arms it.</p>
+
+          <h4>Want a clean slate</h4>
+          <p><code>rm state.db*</code> (the <code>*</code> also removes WAL sidecar files); the next Start
+            re-seeds silently from scratch.</p>
+
+          <div class="callout tip">
+            <span class="ic">🧰</span>
+            <p>Resilience at a glance: network blips are logged + counted and the loop continues; a slow
+            browser's event queue drops overflow so detectors never block; on restart the WAL dedup means
+            no re-seed and no false alerts.</p>
+          </div>
+        </section>
+        <hr class="section-divider" />
+
+        <!-- 13. Going live -->
+        <section class="doc" id="going-live" data-title="going live vps seoul oracle cloud systemd cron static ip api keys production">
+          <h2><span class="sec-num">13</span> Going live (VPS)</h2>
+          <p class="lede">When and how to leave localhost.</p>
+          <p>
+            Move to a Seoul VM when you start acting on alerts for real or wire up auto-trade. Almost
+            nothing changes — the same WSL/Ubuntu code copies straight to an Oracle Cloud <strong>Seoul</strong>
+            Always-Free ARM box (or a ~$5–12/mo Tokyo/Seoul VPS).
+          </p>
+          <p>What you add:</p>
+          <ul>
+            <li>A <code>systemd</code> service instead of tmux.</li>
+            <li>A keep-alive cron (Oracle reclaims idle instances after ~7 days).</li>
+            <li>A static IP for exchange-key whitelisting.</li>
+            <li>Trade-only API keys (no withdrawal).</li>
+          </ul>
+          <div class="callout note">
+            <span class="ic">🚀</span>
+            <p>Building on WSL2 Ubuntu now means <strong>zero rewrite later</strong> — that's the whole point.</p>
+          </div>
+        </section>
+
+        <div class="no-results" id="noResults">No sections match your filter.</div>
+
+        <footer class="footer">
+          Upbit Watch documentation · matches the live control panel at
+          <a href="http://localhost:8000" target="_blank" rel="noopener">localhost:8000</a>.
+          Source docs: <code>README.md</code>, <code>SETUP_AND_GUIDE.md</code>, <code>HOW_IT_WORKS.md</code>.
+        </footer>
+
+      </div>
+    </main>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

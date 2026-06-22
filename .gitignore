@@ -1,0 +1,5 @@
+.claude/
+.playwright-mcp/
+graphify-out/
+.env
+node_modules/
