@@ -18,6 +18,10 @@ state.db
 state.db-shm
 state.db-wal
 
+# Server launch logs (from redirected uvicorn output)
+server.out
+server.err
+
 # Editor / OS
 *.swp
 Thumbs.db
