@@ -225,7 +225,7 @@ endpoint `subscribe()`s and forwards them. Detectors never know about the browse
 | Cloudflare `429` on Loop B | logged + counted; Loop A unaffected; raise Loop B interval in Settings |
 | Binance geo-blocked | Phase 0 stores `NULL` for Binance; Bybit still recorded |
 | Process restart / reboot | dedup persists (WAL) → no re-seed, no false alerts; autostart re-arms |
-| Laptop sleep | WSL suspends → bot pauses; relaunch (autostart) resumes |
+| PC sleep | process pauses → bot pauses; relaunch (autostart) resumes |
 | Slow/stuck browser | its event queue drops overflow; detectors never block |
 
 ---

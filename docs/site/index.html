@@ -80,7 +80,7 @@
             A dark control panel that detects <strong>new Upbit listings</strong> the moment they
             appear and pings your Telegram. One FastAPI process supervises two independent detection
             loops plus a price-snapshot logger, streaming everything live to a browser dashboard over
-            WebSocket. Built to run on WSL2 Ubuntu for $0 — deployable unchanged to a Seoul VPS later.
+            WebSocket. Runs natively on Windows for $0 — the same Python code deploys unchanged to a Seoul VPS later.
             The dashboard is now <strong>fully user-configurable</strong> — detector behaviour, alerts,
             appearance, and display — with <strong>light / dark / system</strong> themes and accent colours.
           </p>
@@ -154,62 +154,47 @@
         <hr class="section-divider" />
 
         <!-- 2. Prerequisites -->
-        <section class="doc" id="prerequisites" data-title="prerequisites requirements wsl python telegram network">
+        <section class="doc" id="prerequisites" data-title="prerequisites requirements windows python telegram network">
           <h2><span class="sec-num">02</span> Prerequisites</h2>
           <p class="lede">What you need before installing.</p>
           <ul>
-            <li><strong>WSL2 Ubuntu</strong> (24.04) with <strong>Python 3.12</strong> — verify with <code>python3 --version</code>.</li>
+            <li><strong>Windows 10/11</strong> with <strong>Python 3.11+</strong> — verify in a terminal with <code>py --version</code>. Install from <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">python.org</a> and tick <em>"Add python.exe to PATH"</em>.</li>
             <li>A <strong>Telegram bot token + chat ID</strong> (see <a href="#telegram">§4</a>).</li>
             <li><strong>Outbound internet only</strong> — no port-forwarding or firewall changes. Upbit + Bybit must be reachable; Binance is optional (it's intermittently geo-blocked and treated as best-effort).</li>
           </ul>
           <div class="callout note">
             <span class="ic">💡</span>
-            <p>Why WSL2 and not native Windows Python? Clean Linux async networking, and it's the
-            <strong>same OS as the eventual Seoul VPS</strong> — so the code you build locally deploys unchanged.</p>
+            <p>The bot is pure Python and OS-agnostic — it runs natively on Windows and the
+            <strong>same code deploys unchanged to a Linux Seoul VPS</strong> later.</p>
           </div>
         </section>
         <hr class="section-divider" />
 
         <!-- 3. Install -->
-        <section class="doc" id="install" data-title="install setup venv virtualenv pip bootstrap dependencies requirements">
+        <section class="doc" id="install" data-title="install setup venv virtualenv pip dependencies requirements setup.bat">
           <h2><span class="sec-num">03</span> Install &amp; setup</h2>
-          <p class="lede">Get the code into WSL and build the virtual environment.</p>
+          <p class="lede">One double-click builds the virtual environment and installs everything.</p>
 
-          <h3>1 · Project directory</h3>
+          <h3>1 · Run the setup script</h3>
+          <p>Double-click <code>setup.bat</code> in the project folder (or run it from a terminal):</p>
           <div class="code">
-            <div class="code-head"><span>bash</span><button class="copy-btn">Copy</button></div>
-            <pre><code>mkdir -p ~/upbit-bot &amp;&amp; cd ~/upbit-bot   # already created on this machine</code></pre>
+            <div class="code-head"><span>cmd</span><button class="copy-btn">Copy</button></div>
+            <pre><code>setup.bat</code></pre>
           </div>
+          <p>It creates the <code>.venv</code> virtual environment and installs the dependencies.</p>
 
-          <h3>2 · Virtual environment (with the pip bootstrap)</h3>
-          <p>
-            On this machine <code>python3.12-venv</code>/<code>ensurepip</code> is <strong>not</strong>
-            installed and <code>sudo</code> needs a password — so the venv is created
-            <strong>without pip</strong>, then pip is bootstrapped manually:
-          </p>
+          <h3>2 · …or do it manually</h3>
+          <p><code>setup.bat</code> is just the two commands below:</p>
           <div class="code">
-            <div class="code-head"><span>bash</span><button class="copy-btn">Copy</button></div>
-            <pre><code>python3 -m venv --without-pip .venv
-curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
-.venv/bin/python /tmp/get-pip.py</code></pre>
-          </div>
-          <div class="callout tip">
-            <span class="ic">✅</span>
-            <p>If you ever have <code>sudo</code> access, the simpler path is
-            <code>sudo apt install -y python3.12-venv python3-pip</code> then a normal
-            <code>python3 -m venv .venv</code>.</p>
-          </div>
-
-          <h3>3 · Dependencies</h3>
-          <div class="code">
-            <div class="code-head"><span>bash</span><button class="copy-btn">Copy</button></div>
-            <pre><code>.venv/bin/python -m pip install -r requirements.txt
-# installs: fastapi, uvicorn[standard], aiohttp, python-dotenv</code></pre>
+            <div class="code-head"><span>cmd</span><button class="copy-btn">Copy</button></div>
+            <pre><code>py -3 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+:: installs: fastapi, uvicorn[standard], aiohttp, python-dotenv</code></pre>
           </div>
           <div class="callout warn">
             <span class="ic">⚠️</span>
-            <p>Always invoke Python/pip as <code>.venv/bin/python -m …</code> — because the venv was
-            bootstrapped manually, calling a bare <code>pip</code> may hit the wrong interpreter.</p>
+            <p>Invoke Python/pip through the venv as <code>.venv\Scripts\python.exe -m …</code> so you
+            always hit the project's interpreter rather than a global one.</p>
           </div>
         </section>
         <hr class="section-divider" />
@@ -222,7 +207,7 @@ curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
             <li>In Telegram, message <strong>@BotFather</strong> → <code>/newbot</code> → copy the <strong>token</strong> (<code>123456:ABC...</code>).</li>
             <li>Send your new bot any message, then open
               <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code> and copy your numeric <strong>chat id</strong>.</li>
-            <li>Put them in <code>~/upbit-bot/.env</code>:</li>
+            <li>Put them in <code>.env</code> (in the project folder):</li>
           </ol>
           <div class="code">
             <div class="code-head"><span>.env</span><button class="copy-btn">Copy</button></div>
@@ -243,29 +228,39 @@ TELEGRAM_CHAT_ID=987654321</code></pre>
         <hr class="section-divider" />
 
         <!-- 5. Run -->
-        <section class="doc" id="run" data-title="run running tmux uvicorn autostart reset stop start localhost port 8000">
+        <section class="doc" id="run" data-title="run running uvicorn autostart reset stop start localhost port 8000 run.bat setup.bat">
           <h2><span class="sec-num">05</span> Running it</h2>
-          <p class="lede">Start the server, then open the dashboard in your browser.</p>
+          <p class="lede">Three steps — set up once, launch, open the dashboard.</p>
 
-          <div class="code">
-            <div class="code-head"><span>bash</span><button class="copy-btn">Copy</button></div>
-            <pre><code>cd ~/upbit-bot
-tmux new -s upbit ./run.sh        # starts uvicorn on 127.0.0.1:8000
-# detach:   Ctrl-b then d
-# reattach: tmux attach -t upbit
-# stop:     tmux kill-session -t upbit</code></pre>
+          <h3>Step by step</h3>
+          <ol>
+            <li>Run <code>setup.bat</code> <strong>once</strong> to build the environment (see <a href="#install">§3</a>).</li>
+            <li>Create your <code>.env</code> with the Telegram token + chat ID (see <a href="#telegram">§4</a>), or add them later in <strong>Settings → Telegram</strong>.</li>
+            <li>Launch the bot — double-click one of the scripts below.</li>
+            <li>Open <a href="http://localhost:8000" target="_blank" rel="noopener"><strong>http://localhost:8000</strong></a> (the launchers open it for you).</li>
+          </ol>
+
+          <h3>Launcher scripts</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Script</th><th>What it does</th></tr></thead>
+              <tbody>
+                <tr><td><code>run.bat</code></td><td>Runs in the current window (Ctrl+C to stop) and opens the dashboard.</td></tr>
+                <tr><td><code>run-upbit-watch.bat</code></td><td>Starts the server in a minimized background window, then opens the dashboard.</td></tr>
+                <tr><td><code>stop-upbit-watch.bat</code></td><td>Stops the background server started above.</td></tr>
+              </tbody>
+            </table>
           </div>
-          <p>
-            The raw command behind <code>run.sh</code> is:
-          </p>
+
+          <h3>…or run uvicorn directly</h3>
           <div class="code">
-            <div class="code-head"><span>bash</span><button class="copy-btn">Copy</button></div>
-            <pre><code>.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8000</code></pre>
+            <div class="code-head"><span>cmd</span><button class="copy-btn">Copy</button></div>
+            <pre><code>.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8000</code></pre>
           </div>
           <p>
             Then open <a href="http://localhost:8000" target="_blank" rel="noopener"><strong>http://localhost:8000</strong></a>
-            in your Windows browser — WSL2 forwards localhost. Press <strong>Start</strong>: the first
-            run seeds existing markets silently; afterward it alerts only on genuinely new ones.
+            in your browser. The first run seeds existing markets silently; afterward it alerts only on
+            genuinely new ones.
           </p>
 
           <h3>Autostart</h3>
@@ -277,16 +272,16 @@ tmux new -s upbit ./run.sh        # starts uvicorn on 127.0.0.1:8000
 
           <h3>Reset to a clean slate</h3>
           <div class="code">
-            <div class="code-head"><span>bash</span><button class="copy-btn">Copy</button></div>
-            <pre><code>rm state.db*        # the * also removes the WAL sidecar files
-# next Start re-seeds silently from scratch</code></pre>
+            <div class="code-head"><span>cmd</span><button class="copy-btn">Copy</button></div>
+            <pre><code>del state.db state.db-shm state.db-wal
+:: next Start re-seeds silently from scratch</code></pre>
           </div>
 
           <div class="callout warn">
             <span class="ic">⚠️</span>
-            <p><strong>Laptop sleep/hibernate kills WSL and the bot.</strong> For long Phase 0 runs:
-            plug in and set Windows power to "never sleep." If keeping it awake for weeks is impractical,
-            that's the cue to move to a free Oracle Cloud Seoul box.</p>
+            <p><strong>PC sleep/hibernate pauses the bot.</strong> For long Phase 0 runs: plug in and set
+            Windows power to "never sleep." If keeping it awake for weeks is impractical, that's the cue
+            to move to a free Oracle Cloud Seoul box.</p>
           </div>
         </section>
         <hr class="section-divider" />
@@ -567,15 +562,19 @@ tmux new -s upbit ./run.sh        # starts uvicorn on 127.0.0.1:8000
             expected and non-fatal — the chart just shows a gap.</p>
 
           <h4>Browser can't reach localhost:8000</h4>
-          <p>Make sure uvicorn is still running (<code>tmux attach -t upbit</code>) and that it bound to
+          <p>Make sure the server window is still running and that it bound to
             <code>127.0.0.1:8000</code>.</p>
 
           <h4>Bot went quiet after closing the laptop</h4>
-          <p>WSL was suspended on sleep. Relaunch — autostart re-arms it.</p>
+          <p>The PC slept and paused the process. Relaunch — autostart re-arms it.</p>
 
           <h4>Want a clean slate</h4>
-          <p><code>rm state.db*</code> (the <code>*</code> also removes WAL sidecar files); the next Start
-            re-seeds silently from scratch.</p>
+          <p><code>del state.db state.db-shm state.db-wal</code> (removes the WAL sidecar files too); the next
+            Start re-seeds silently from scratch.</p>
+
+          <h4><code>'py' is not recognized</code></h4>
+          <p>Python isn't on PATH. Reinstall from python.org with "Add to PATH" ticked, or put the full
+            path to <code>python.exe</code> in <code>setup.bat</code>.</p>
 
           <div class="callout tip">
             <span class="ic">🧰</span>
@@ -592,19 +591,19 @@ tmux new -s upbit ./run.sh        # starts uvicorn on 127.0.0.1:8000
           <p class="lede">When and how to leave localhost.</p>
           <p>
             Move to a Seoul VM when you start acting on alerts for real or wire up auto-trade. Almost
-            nothing changes — the same WSL/Ubuntu code copies straight to an Oracle Cloud <strong>Seoul</strong>
+            nothing changes — the same Python code copies straight to an Oracle Cloud <strong>Seoul</strong>
             Always-Free ARM box (or a ~$5–12/mo Tokyo/Seoul VPS).
           </p>
           <p>What you add:</p>
           <ul>
-            <li>A <code>systemd</code> service instead of tmux.</li>
+            <li>A <code>systemd</code> service instead of the <code>.bat</code> launcher.</li>
             <li>A keep-alive cron (Oracle reclaims idle instances after ~7 days).</li>
             <li>A static IP for exchange-key whitelisting.</li>
             <li>Trade-only API keys (no withdrawal).</li>
           </ul>
           <div class="callout note">
             <span class="ic">🚀</span>
-            <p>Building on WSL2 Ubuntu now means <strong>zero rewrite later</strong> — that's the whole point.</p>
+            <p>The code is OS-agnostic, so there's <strong>zero rewrite later</strong> — that's the whole point.</p>
           </div>
         </section>
 
@@ -613,7 +612,7 @@ tmux new -s upbit ./run.sh        # starts uvicorn on 127.0.0.1:8000
         <footer class="footer">
           Upbit Watch documentation · matches the live control panel at
           <a href="http://localhost:8000" target="_blank" rel="noopener">localhost:8000</a>.
-          Source docs: <code>README.md</code>, <code>SETUP_AND_GUIDE.md</code>, <code>HOW_IT_WORKS.md</code>.
+          Source docs: <code>README.md</code>, <code>docs/SETUP_AND_GUIDE.md</code>, <code>docs/HOW_IT_WORKS.md</code>.
         </footer>
 
       </div>

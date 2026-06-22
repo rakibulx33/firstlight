@@ -1,7 +1,7 @@
 # Upbit Watch — localhost control panel
 
 A beautiful dark control panel that runs and monitors the Upbit new-listing detector
-(built from `LOCALHOST_BUILD_PLAN.md`). One FastAPI app supervises the detector and streams
+(built from `docs/LOCALHOST_BUILD_PLAN.md`). One FastAPI app supervises the detector and streams
 live status / listings / logs / price snapshots over WebSocket.
 
 ## Run (Windows)
@@ -45,7 +45,14 @@ Dedup (SQLite `state.db`) survives restarts.
 ## Files
 `app.py` (FastAPI + WebSocket), `detector.py` (Loop A engine), `notice.py` (Loop B announcement
 poller), `phase0.py` (price logger), `notify.py` (Telegram), `static/index.html` (dashboard),
-`config.json`, `.env` (secrets).
+`config.json`, `.env` (secrets), `tests/` (pytest suite).
+
+## Documentation
+Full guides live in [`docs/`](docs/):
+- [`SETUP_AND_GUIDE.md`](docs/SETUP_AND_GUIDE.md) — install, Telegram, running, troubleshooting.
+- [`HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md) — architecture, data flow, what each file/function does.
+- [`LOCALHOST_BUILD_PLAN.md`](docs/LOCALHOST_BUILD_PLAN.md) — original build plan (historical).
+- [`site/`](docs/site/) — the standalone documentation website (open `docs/site/index.html`).
 
 ## Reset
 ```bat
