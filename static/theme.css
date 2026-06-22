@@ -1,0 +1,45 @@
+:root{
+  --bg:15 23 42; --surface:19 29 49; --card:30 41 59; --muted:39 51 73;
+  --border:51 65 85; --fg:248 250 252; --sub:148 163 184;
+  --primary:245 158 11; --accent:139 92 246;
+  --ok:34 197 94; --warn:245 158 11; --danger:239 68 68;
+}
+:root[data-theme="light"]{
+  --bg:248 250 252; --surface:255 255 255; --card:255 255 255; --muted:241 245 249;
+  --border:226 232 240; --fg:15 23 42; --sub:71 85 105;
+  --primary:217 119 6; --accent:124 58 237;
+  --ok:22 163 74; --warn:202 138 4; --danger:220 38 38;
+}
+:root[data-accent="violet"]{--primary:139 92 246}
+:root[data-accent="blue"]{--primary:59 130 246}
+:root[data-accent="green"]{--primary:34 197 94}
+:root[data-accent="rose"]{--primary:244 63 94}
+:root[data-density="compact"]{--space-card:0.75rem}
+html{font-size:15px}
+:root[data-fontscale="sm"] html, html[data-fontscale="sm"]{font-size:14px}
+:root[data-fontscale="lg"] html, html[data-fontscale="lg"]{font-size:16px}
+    [x-cloak]{display:none!important}
+    .skip-link{position:absolute;top:-999px;left:8px;z-index:9999;padding:6px 12px;background:rgb(var(--primary));color:rgb(var(--bg));font-weight:600;border-radius:0 0 6px 6px;text-decoration:none;font-size:14px}
+    .skip-link:focus{top:0}
+    html,body{background:rgb(var(--bg));color:rgb(var(--fg));font-family:Inter,system-ui,sans-serif}
+    .tabnum{font-variant-numeric:tabular-nums}
+    .glass{background:linear-gradient(180deg,rgb(var(--card) / .85),rgb(var(--surface) / .85));backdrop-filter:blur(6px)}
+    ::-webkit-scrollbar{width:10px;height:10px}
+    ::-webkit-scrollbar-thumb{background:rgb(var(--border));border-radius:8px}
+    ::-webkit-scrollbar-track{background:transparent}
+    @keyframes pulsering{0%{box-shadow:0 0 0 0 rgb(var(--ok) / .5)}70%{box-shadow:0 0 0 8px rgb(var(--ok) / 0)}100%{box-shadow:0 0 0 0 rgb(var(--ok) / 0)}}
+    .live-dot{animation:pulsering 1.8s infinite}
+    @keyframes flashin{0%{background-color:rgb(var(--primary) / .25)}100%{background-color:transparent}}
+    .flash{animation:flashin 1.4s ease-out}
+    @keyframes slidein{from{transform:translateX(20px);opacity:0}to{transform:translateX(0);opacity:1}}
+    .slidein{animation:slidein .25s ease-out}
+    .btn{transition:all .18s ease;cursor:pointer}
+    a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:none;box-shadow:0 0 0 3px rgb(var(--primary) / .55);border-radius:6px}
+    .btn:focus-visible{outline:none;box-shadow:0 0 0 3px rgb(var(--primary) / .55);border-radius:8px}
+    @media (prefers-reduced-motion: reduce){
+      .live-dot,.flash,.slidein{animation:none!important}
+      *{transition:none!important}
+    }
+:root[data-density="compact"] .p-5{padding:0.85rem}
+:root[data-density="compact"] .py-3{padding-top:0.4rem;padding-bottom:0.4rem}
+:root[data-density="compact"] .gap-6{gap:1rem}

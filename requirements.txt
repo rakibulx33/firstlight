@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+aiohttp
+python-dotenv
+# dev/test (not needed at runtime): pytest, httpx

@@ -1,13 +1,21 @@
 @echo off
 REM ============================================================
-REM  Upbit Watch - launcher
-REM  Starts the detector + control panel (running in WSL) in a
-REM  detached tmux session, then opens the dashboard in Windows.
+REM  Upbit Watch - background launcher (native Windows)
+REM  Starts the detector + control panel in a separate window,
+REM  then opens the dashboard. Stop it with stop-upbit-watch.bat.
 REM ============================================================
+setlocal
+cd /d "%~dp0"
 title Upbit Watch
 
-echo Starting Upbit Watch in WSL...
-wsl -d Ubuntu bash -lc "tmux has-session -t upbit 2>/dev/null && echo [already running] || tmux new -d -s upbit /home/rakibul/upbit-bot/run.sh"
+if not exist ".venv\Scripts\python.exe" (
+  echo [ERROR] Virtual environment not found. Run setup.bat first.
+  pause
+  exit /b 1
+)
+
+echo Starting Upbit Watch server...
+start "UpbitWatchServer" /min ".venv\Scripts\python.exe" -m uvicorn app:app --host 127.0.0.1 --port 8000
 
 echo Waiting for the server to come up...
 timeout /t 4 /nobreak >nul

@@ -1,0 +1,5 @@
+{
+  "poll_interval": 1.0,
+  "poll_interval_notice": 8.0,
+  "autostart": true
+}

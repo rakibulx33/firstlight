@@ -1,0 +1,729 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <script>
+    (function(){
+      try{
+        var p = JSON.parse(localStorage.getItem('upbitwatch.prefs')||'{}');
+        var root = document.documentElement;
+        var theme = p.theme||'dark';
+        if(theme==='system') theme = matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';
+        root.setAttribute('data-theme', theme);
+        root.setAttribute('data-accent', p.accent||'amber');
+        root.setAttribute('data-density', p.density||'comfortable');
+        root.setAttribute('data-fontscale', p.fontScale||'base');
+      }catch(e){}
+    })();
+  </script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Upbit Watch — Control Panel</title>
+  <link rel="icon" href="data:," />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: {
+        colors: {
+          bg: 'rgb(var(--bg) / <alpha-value>)', surface: 'rgb(var(--surface) / <alpha-value>)',
+          card: 'rgb(var(--card) / <alpha-value>)', muted: 'rgb(var(--muted) / <alpha-value>)',
+          border: 'rgb(var(--border) / <alpha-value>)', fg: 'rgb(var(--fg) / <alpha-value>)',
+          sub: 'rgb(var(--sub) / <alpha-value>)', primary: 'rgb(var(--primary) / <alpha-value>)',
+          accent: 'rgb(var(--accent) / <alpha-value>)', ok: 'rgb(var(--ok) / <alpha-value>)',
+          warn: 'rgb(var(--warn) / <alpha-value>)', danger: 'rgb(var(--danger) / <alpha-value>)'
+        },
+        fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'] }
+      } }
+    }
+  </script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <link rel="stylesheet" href="/static/theme.css" />
+</head>
+<body x-data="app()" x-init="init()" x-cloak class="min-h-dvh">
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <!-- ===== Top bar ===== -->
+  <header class="sticky top-0 z-30 glass border-b border-border">
+    <div class="max-w-[1500px] mx-auto px-4 sm:px-6 min-h-[64px] flex flex-wrap items-center gap-3 py-2">
+      <div class="flex items-center gap-3 shrink-0">
+        <span class="relative flex h-3 w-3">
+          <span class="absolute inline-flex h-3 w-3 rounded-full"
+                :class="status.running ? 'bg-ok live-dot' : 'bg-sub'"></span>
+        </span>
+        <div class="leading-tight">
+          <div class="font-semibold tracking-wide">UPBIT&nbsp;WATCH</div>
+          <div class="text-[11px] text-sub -mt-0.5">listing detector · control panel</div>
+        </div>
+      </div>
+
+      <!-- controls -->
+      <div class="flex items-center gap-2 ml-2">
+        <button class="btn px-3.5 py-2 rounded-lg bg-primary text-bg font-semibold text-sm flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                :disabled="status.running || busy" @click="ctrl('start')" aria-label="Start detector">
+          <i data-lucide="play" class="w-4 h-4"></i> Start
+        </button>
+        <button class="btn px-3.5 py-2 rounded-lg border border-danger/60 text-danger font-medium text-sm flex items-center gap-1.5 hover:bg-danger/10 disabled:opacity-40 disabled:cursor-not-allowed"
+                :disabled="!status.running || busy" @click="stopConfirm()" aria-label="Stop detector">
+          <i data-lucide="square" class="w-4 h-4"></i> Stop
+        </button>
+        <button class="btn px-3.5 py-2 rounded-lg border border-border text-sub font-medium text-sm flex items-center gap-1.5 hover:text-fg hover:border-sub disabled:opacity-40"
+                :disabled="busy" @click="ctrl('restart')" aria-label="Restart detector">
+          <i data-lucide="rotate-cw" class="w-4 h-4"></i> Restart
+        </button>
+      </div>
+
+      <div class="ml-auto flex items-center gap-3">
+        <span class="hidden sm:inline-flex items-center gap-1.5 text-xs text-sub px-2.5 py-1 rounded-full border border-border tabnum">
+          <i data-lucide="timer" class="w-3.5 h-3.5"></i> <span x-text="status.poll_interval + 's'"></span>
+        </span>
+        <span class="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border"
+              :class="connected ? 'border-ok/40 text-ok' : 'border-danger/40 text-danger'">
+          <span class="h-1.5 w-1.5 rounded-full" :class="connected ? 'bg-ok' : 'bg-danger'"></span>
+          <span x-text="connected ? 'live' : 'offline'"></span>
+        </span>
+        <button class="btn p-2.5 min-w-[44px] min-h-[44px] rounded-lg border border-border text-sub hover:text-fg hover:border-sub flex items-center justify-center"
+                @click="openSettings()" aria-label="Open settings">
+          <i data-lucide="settings" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===== Body ===== -->
+  <main id="main" class="max-w-[1500px] mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-6">
+
+    <!-- Status sidebar -->
+    <aside class="space-y-4">
+      <section x-show="prefs.visibleCards.includes('status')" class="rounded-2xl border border-border bg-card p-5">
+        <div class="flex items-center justify-between">
+          <span class="text-xs uppercase tracking-wider text-sub">Status</span>
+          <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+                :class="status.running ? 'bg-ok/15 text-ok' : 'bg-muted text-sub'"
+                x-text="status.running ? 'RUNNING' : 'STOPPED'"></span>
+        </div>
+        <div class="mt-4 grid grid-cols-2 gap-3">
+          <div class="rounded-xl bg-muted/50 p-3">
+            <div class="text-[11px] text-sub">Uptime</div>
+            <div class="text-lg font-semibold tabnum" x-text="fmtUptime(status.uptime_s)"></div>
+          </div>
+          <div class="rounded-xl bg-muted/50 p-3">
+            <div class="text-[11px] text-sub">Markets</div>
+            <div class="text-lg font-semibold tabnum text-primary" x-text="status.markets_count ?? 0"></div>
+          </div>
+          <div class="rounded-xl bg-muted/50 p-3">
+            <div class="text-[11px] text-sub">Last poll</div>
+            <div class="text-sm font-medium tabnum" x-text="fmtTime(status.last_poll_ts)"></div>
+          </div>
+          <div class="rounded-xl bg-muted/50 p-3">
+            <div class="text-[11px] text-sub">Latency</div>
+            <div class="text-sm font-medium tabnum" x-text="status.last_latency_ms != null ? status.last_latency_ms + ' ms' : '—'"></div>
+          </div>
+          <div class="rounded-xl bg-muted/50 p-3">
+            <div class="text-[11px] text-sub">Polls</div>
+            <div class="text-sm font-medium tabnum" x-text="status.poll_count ?? 0"></div>
+          </div>
+          <div class="rounded-xl bg-muted/50 p-3">
+            <div class="text-[11px] text-sub">Errors</div>
+            <div class="text-sm font-medium tabnum" :class="status.error_count ? 'text-danger' : ''" x-text="status.error_count ?? 0"></div>
+          </div>
+        </div>
+        <p x-show="status.last_error" class="mt-3 text-xs text-danger/90 break-words" x-text="'⚠ ' + (status.last_error||'')"></p>
+
+        <div x-show="status.loop_b" class="mt-4 pt-4 border-t border-border">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-[11px] uppercase tracking-wider text-sub">Loop B · announcements</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded-full"
+                  :class="status.loop_b && status.loop_b.running ? 'bg-ok/15 text-ok' : 'bg-muted text-sub'"
+                  x-text="status.loop_b && status.loop_b.running ? 'on' : 'off'"></span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 text-center">
+            <div class="rounded-lg bg-muted/50 p-2"><div class="text-[10px] text-sub">Notices</div><div class="text-sm font-semibold tabnum" x-text="status.loop_b ? status.loop_b.notice_count : 0"></div></div>
+            <div class="rounded-lg bg-muted/50 p-2"><div class="text-[10px] text-sub">Listings</div><div class="text-sm font-semibold tabnum text-primary" x-text="status.loop_b ? status.loop_b.listing_count : 0"></div></div>
+            <div class="rounded-lg bg-muted/50 p-2"><div class="text-[10px] text-sub">Errors</div><div class="text-sm font-semibold tabnum" :class="status.loop_b && status.loop_b.error_count ? 'text-danger' : ''" x-text="status.loop_b ? status.loop_b.error_count : 0"></div></div>
+          </div>
+          <p x-show="status.loop_b && status.loop_b.last_error" class="mt-2 text-[11px] text-danger/90 break-words" x-text="'⚠ ' + (status.loop_b ? status.loop_b.last_error : '')"></p>
+        </div>
+      </section>
+
+      <section x-show="prefs.visibleCards.includes('about')" class="rounded-2xl border border-border bg-card p-5">
+        <div class="text-xs uppercase tracking-wider text-sub mb-2">About</div>
+        <p class="text-sm text-sub leading-relaxed">
+          Polls <span class="text-fg">Upbit market/all</span> and alerts the moment a brand-new market appears.
+          First run seeds existing markets <span class="text-fg">silently</span>; dedup survives restarts.
+        </p>
+      </section>
+    </aside>
+
+    <!-- Content -->
+    <section class="min-w-0">
+      <!-- tabs -->
+      <div class="flex items-center gap-1 mb-4 border-b border-border">
+        <template x-for="t in tabs" :key="t.id">
+          <button class="btn px-4 py-2.5 text-sm font-medium -mb-px border-b-2"
+                  :class="tab===t.id ? 'border-primary text-fg' : 'border-transparent text-sub hover:text-fg'"
+                  x-show="prefs.visibleTabs.includes(t.id)"
+                  @click="switchTab(t.id)" x-text="t.label"></button>
+        </template>
+      </div>
+
+      <!-- LIVE tab -->
+      <div x-show="tab==='live'" class="grid grid-cols-1 xl:grid-cols-2 gap-5">
+        <!-- listings -->
+        <div class="rounded-2xl border border-border bg-card overflow-hidden flex flex-col min-h-[420px]">
+          <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+            <span class="font-medium flex items-center gap-2"><i data-lucide="zap" class="w-4 h-4 text-primary"></i> New Listings</span>
+            <span class="text-xs text-sub tabnum" x-text="listings.length + ' total'"></span>
+          </div>
+          <div class="flex-1 overflow-y-auto p-3 space-y-2">
+            <template x-if="listings.length===0">
+              <div class="h-full flex flex-col items-center justify-center text-center text-sub py-12">
+                <i data-lucide="radar" class="w-8 h-8 mb-3 opacity-60"></i>
+                <p class="text-sm">No new listings yet.</p>
+                <p class="text-xs mt-1 max-w-xs">Seeding silently — a card appears here the instant Upbit adds a market.</p>
+              </div>
+            </template>
+            <template x-for="(l,i) in listings" :key="l.market + l.detected_at">
+              <div class="rounded-xl border border-border bg-muted/40 p-3" :class="i===0 ? 'flash' : ''">
+                <div class="flex items-center justify-between gap-3">
+                  <span class="font-semibold text-primary tabnum" x-text="l.market"></span>
+                  <span class="text-[11px] text-sub tabnum" x-text="fmtTime(l.detected_at)"></span>
+                </div>
+                <div class="text-sm mt-0.5" x-text="l.english + (l.korean ? '  ('+l.korean+')' : '')"></div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- logs -->
+        <div class="rounded-2xl border border-border bg-card overflow-hidden flex flex-col min-h-[420px]">
+          <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+            <span class="font-medium flex items-center gap-2"><i data-lucide="terminal" class="w-4 h-4 text-accent"></i> Logs</span>
+            <span class="text-xs text-sub tabnum" x-text="logs.length"></span>
+          </div>
+          <div id="logbox" class="flex-1 overflow-y-auto p-3 font-mono text-[12px] leading-relaxed space-y-0.5">
+            <template x-if="logs.length===0">
+              <div class="text-sub text-center py-12">No logs yet.</div>
+            </template>
+            <template x-for="(g,i) in logs" :key="i">
+              <div class="flex gap-2">
+                <span class="text-sub shrink-0 tabnum" x-text="fmtTime(g.ts)"></span>
+                <span class="shrink-0 uppercase text-[10px] mt-0.5 px-1.5 rounded"
+                      :class="g.level==='error' ? 'bg-danger/20 text-danger' : g.level==='alert' ? 'bg-primary/20 text-primary' : 'bg-muted text-sub'"
+                      x-text="g.level"></span>
+                <span class="break-words" x-text="g.msg"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <!-- ANNOUNCE tab (Loop B) -->
+      <div x-show="tab==='announce'" class="rounded-2xl border border-border bg-card overflow-hidden flex flex-col min-h-[460px]">
+        <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+          <span class="font-medium flex items-center gap-2"><i data-lucide="megaphone" class="w-4 h-4 text-primary"></i> Announcements <span class="text-xs text-sub font-normal">· Loop B</span></span>
+          <span class="text-xs text-sub tabnum" x-text="notices.length + ' shown'"></span>
+        </div>
+        <div class="flex-1 overflow-y-auto p-3 space-y-2">
+          <template x-if="notices.length===0">
+            <div class="h-full flex flex-col items-center justify-center text-center text-sub py-12">
+              <i data-lucide="megaphone" class="w-8 h-8 mb-3 opacity-60"></i>
+              <p class="text-sm">No announcements captured yet.</p>
+              <p class="text-xs mt-1 max-w-sm">Loop B polls Upbit's trade announcements; new listing notices appear here (and ping Telegram) the moment they post.</p>
+            </div>
+          </template>
+          <template x-for="n in notices" :key="n.id">
+            <a :href="'https://upbit.com/service_center/notice?id=' + n.id" target="_blank" rel="noopener"
+               class="btn block rounded-xl border p-3 hover:border-sub"
+               :class="n.is_listing ? 'border-primary/50 bg-primary/5' : 'border-border bg-muted/30'">
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span x-show="n.ticker" class="text-xs font-semibold px-1.5 py-0.5 rounded tabnum"
+                        :class="n.is_listing ? 'bg-primary/20 text-primary' : 'bg-muted text-sub'" x-text="n.ticker"></span>
+                  <span x-show="n.is_listing" class="text-[10px] uppercase tracking-wide text-primary">listing</span>
+                </div>
+                <span class="text-[11px] text-sub shrink-0 tabnum" x-text="fmtTime(n.listed_at)"></span>
+              </div>
+              <div class="text-sm mt-1 break-words" x-text="n.title"></div>
+            </a>
+          </template>
+        </div>
+      </div>
+
+      <!-- MARKETS tab -->
+      <div x-show="tab==='markets'" class="rounded-2xl border border-border bg-card overflow-hidden">
+        <div class="px-4 py-3 border-b border-border flex items-center gap-3">
+          <span class="font-medium flex items-center gap-2"><i data-lucide="list" class="w-4 h-4 text-primary"></i> Markets</span>
+          <span class="text-xs text-sub tabnum" x-text="pagedMarkets.length + ' / ' + filteredMarkets.length"></span>
+          <div class="ml-auto relative">
+            <i data-lucide="search" class="w-4 h-4 text-sub absolute left-2.5 top-1/2 -translate-y-1/2"></i>
+            <input x-model="marketFilter" placeholder="Filter e.g. KRW-"
+                   class="bg-muted/50 border border-border rounded-lg pl-8 pr-3 py-1.5 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          </div>
+        </div>
+        <div class="max-h-[560px] overflow-y-auto">
+          <table class="w-full text-sm">
+            <thead class="sticky top-0 bg-surface text-sub text-xs uppercase">
+              <tr><th class="font-medium px-2 py-2 w-8"></th><th class="text-left font-medium px-4 py-2">Market</th><th class="text-left font-medium px-4 py-2">Seeded</th></tr>
+            </thead>
+            <tbody>
+              <template x-for="m in pagedMarkets" :key="m.market">
+                <tr class="border-t border-border/60 hover:bg-muted/30">
+                  <td class="px-2 py-2">
+                    <button @click="toggleFavorite(m.market)"
+                            :aria-label="(prefs.favorites.includes(m.market) ? 'Unfavorite ' : 'Favorite ') + m.market"
+                            :aria-pressed="prefs.favorites.includes(m.market)"
+                            class="btn min-w-[44px] min-h-[44px] rounded flex items-center justify-center hover:bg-muted/50">
+                      <i data-lucide="star" class="w-3.5 h-3.5" :class="prefs.favorites.includes(m.market)?'text-primary fill-primary':'text-sub'"></i>
+                    </button>
+                  </td>
+                  <td class="px-4 py-2 font-medium tabnum" x-text="m.market"></td>
+                  <td class="px-4 py-2 text-sub tabnum" x-text="fmtTime(m.ts)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          <div x-show="markets.length===0" class="text-center text-sub py-12 text-sm">No markets seeded yet — press Start.</div>
+        </div>
+      </div>
+
+      <!-- PHASE 0 tab -->
+      <div x-show="tab==='phase0'" class="space-y-4">
+        <div class="rounded-2xl border border-border bg-card p-4">
+          <div class="flex flex-wrap items-center gap-3">
+            <span class="font-medium flex items-center gap-2"><i data-lucide="line-chart" class="w-4 h-4 text-primary"></i> Phase 0 — price snapshots</span>
+            <div class="ml-auto flex items-center gap-2">
+              <select x-model="snapMarket" @change="loadSnapshots()" class="bg-muted/50 border border-border rounded-lg px-3 py-1.5 text-sm w-44 tabnum focus:outline-none focus:ring-2 focus:ring-primary/50">
+                <template x-for="m in snapMarkets" :key="m"><option :value="m" x-text="m"></option></template>
+                <template x-if="snapMarkets.length===0"><option value="SIM-BTC">SIM-BTC</option></template>
+              </select>
+              <button class="btn px-3 py-1.5 rounded-lg border border-border text-sub hover:text-fg text-sm" @click="loadSnapshotMarkets().then(() => loadSnapshots())">Refresh</button>
+              <button class="btn px-3 py-1.5 rounded-lg bg-accent text-white text-sm font-medium flex items-center gap-1.5" @click="simulate()">
+                <i data-lucide="flask-conical" class="w-4 h-4"></i> Simulate listing
+              </button>
+            </div>
+          </div>
+          <p class="text-xs text-sub mt-2">
+            Snapshots at +0/10/30/60s/5m. <span class="text-fg">Bybit</span> is primary;
+            <span class="text-fg">Binance</span> is best-effort (currently blocked from this machine → gaps, no crash).
+            “Simulate listing” fires a fake <span class="tabnum">SIM-BTC</span> → BTCUSDT to exercise the pipeline.
+          </p>
+        </div>
+        <div class="rounded-2xl border border-border bg-card p-4">
+          <div class="h-[360px]"><canvas id="snapChart"></canvas></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== Settings panel (sectioned) ===== -->
+  <div x-show="settingsOpen" x-cloak class="fixed inset-0 z-40" @keydown.escape.window="closeSettings()">
+    <div class="absolute inset-0 bg-black/55" @click="closeSettings()"></div>
+    <div class="absolute right-0 top-0 h-full w-full max-w-2xl bg-surface border-l border-border flex flex-col slidein"
+         role="dialog" aria-modal="true" aria-label="Settings"
+         @keydown.tab="trapFocus($event)"
+         x-ref="settingsPanel">
+
+      <!-- Panel header -->
+      <div class="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
+        <h2 class="text-lg font-semibold flex items-center gap-2"><i data-lucide="settings" class="w-5 h-5 text-primary"></i> Settings</h2>
+        <button class="btn p-2.5 min-w-[44px] min-h-[44px] rounded-lg text-sub hover:text-fg flex items-center justify-center" @click="closeSettings()" aria-label="Close settings" id="settings-close-btn"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+
+      <!-- Panel body: left rail + content -->
+      <div class="flex flex-col md:flex-row flex-1 min-h-0">
+
+        <!-- Left rail (vertical on md+, horizontal scroll on mobile) -->
+        <nav class="shrink-0 border-r border-border md:w-36 w-full md:flex-col flex md:flex-nowrap flex-row flex-wrap md:py-3 py-2 gap-1 px-2 md:border-r md:border-b-0 border-b overflow-x-auto">
+          <button class="btn w-full text-left px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+                  :class="settingsSection==='detector' ? 'bg-primary/15 text-primary' : 'text-sub hover:text-fg hover:bg-muted/50'"
+                  @click="settingsSection='detector'">
+            <i data-lucide="cpu" class="w-4 h-4 shrink-0"></i> Detector
+          </button>
+          <button class="btn w-full text-left px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+                  :class="settingsSection==='alerts' ? 'bg-primary/15 text-primary' : 'text-sub hover:text-fg hover:bg-muted/50'"
+                  @click="settingsSection='alerts'">
+            <i data-lucide="bell" class="w-4 h-4 shrink-0"></i> Alerts
+          </button>
+          <button class="btn w-full text-left px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+                  :class="settingsSection==='appearance' ? 'bg-primary/15 text-primary' : 'text-sub hover:text-fg hover:bg-muted/50'"
+                  @click="settingsSection='appearance'">
+            <i data-lucide="palette" class="w-4 h-4 shrink-0"></i> Appearance
+          </button>
+          <button class="btn w-full text-left px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+                  :class="settingsSection==='display' ? 'bg-primary/15 text-primary' : 'text-sub hover:text-fg hover:bg-muted/50'"
+                  @click="settingsSection='display'">
+            <i data-lucide="layout-dashboard" class="w-4 h-4 shrink-0"></i> Display
+          </button>
+          <button class="btn w-full text-left px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+                  :class="settingsSection==='telegram' ? 'bg-primary/15 text-primary' : 'text-sub hover:text-fg hover:bg-muted/50'"
+                  @click="settingsSection='telegram'">
+            <i data-lucide="send" class="w-4 h-4 shrink-0"></i> Telegram
+          </button>
+          <button class="btn w-full text-left px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+                  :class="settingsSection==='reset' ? 'bg-primary/15 text-primary' : 'text-sub hover:text-fg hover:bg-muted/50'"
+                  @click="settingsSection='reset'">
+            <i data-lucide="rotate-ccw" class="w-4 h-4 shrink-0"></i> Reset
+          </button>
+        </nav>
+
+        <!-- Content area -->
+        <div class="flex-1 overflow-y-auto px-6 py-5">
+
+          <!-- ── Detector ── -->
+          <div x-show="settingsSection==='detector'" class="space-y-5">
+            <div>
+              <label class="block text-sm mb-1.5 text-sub">Loop A poll interval (s)
+                <span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary">affects the bot</span>
+              </label>
+              <input x-model="settings.poll_interval" type="number" step="0.1" min="0.2"
+                     class="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm tabnum focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+              <p class="text-[11px] text-sub mt-1">1/s is well within Upbit's per-IP limit.</p>
+            </div>
+            <div>
+              <label class="block text-sm mb-1.5 text-sub">Loop B poll interval (s)
+                <span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary">affects the bot</span>
+              </label>
+              <input x-model="settings.poll_interval_notice" type="number" step="0.5" min="1"
+                     class="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm tabnum focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+              <p class="text-[11px] text-sub mt-1">Announcements are Cloudflare-fronted — keep ≥3s to avoid 429 from a home IP.</p>
+            </div>
+            <label class="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" x-model="settings.autostart" class="rounded"/>
+              Autostart on launch
+              <span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary">affects the bot</span>
+            </label>
+            <div>
+              <label class="block text-sm mb-1.5 text-sub">Phase 0 offsets (seconds, comma-separated)
+                <span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary">affects the bot</span>
+              </label>
+              <input x-model="settings.phase0_offsets_str" placeholder="0, 10, 30, 60, 300"
+                     class="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm tabnum focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+            </div>
+            <div>
+              <label class="block text-sm mb-1.5 text-sub">Phase 0 snapshot sources
+                <span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary">affects the bot</span>
+              </label>
+              <div class="flex gap-4 text-sm">
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" x-model="settings.phase0_sources.bybit" class="rounded"/> Bybit
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" x-model="settings.phase0_sources.binance" class="rounded"/> Binance
+                </label>
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm mb-1.5 text-sub">Loop B listing keywords (comma-separated)
+                <span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary">affects the bot</span>
+              </label>
+              <input x-model="settings.kw_listing_str"
+                     class="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+            </div>
+            <div>
+              <label class="block text-sm mb-1.5 text-sub">Loop B exclude keywords (comma-separated)
+                <span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary">affects the bot</span>
+              </label>
+              <input x-model="settings.kw_exclude_str"
+                     class="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+            </div>
+          </div>
+
+          <!-- ── Alerts ── -->
+          <div x-show="settingsSection==='alerts'" class="space-y-5">
+            <div>
+              <div class="text-xs uppercase tracking-wider text-sub mb-3 flex items-center gap-2">
+                Alert events
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary">affects the bot</span>
+              </div>
+              <div class="space-y-2">
+                <label class="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" x-model="settings.alert_on_listing" class="rounded"/> Alert on new listing (Loop A)
+                </label>
+                <label class="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" x-model="settings.alert_on_notice" class="rounded"/> Alert on listing announcement (Loop B)
+                </label>
+                <label class="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" x-model="settings.alert_on_error" class="rounded"/> Alert on bot errors
+                </label>
+              </div>
+            </div>
+            <div class="border-t border-border pt-4">
+              <div class="text-xs uppercase tracking-wider text-sub mb-3 flex items-center gap-2">
+                Quiet hours
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary">affects the bot</span>
+              </div>
+              <label class="flex items-center gap-2 text-sm cursor-pointer mb-3">
+                <input type="checkbox" x-model="settings.quiet_hours.enabled" class="rounded"/> Enable quiet hours
+              </label>
+              <div class="grid grid-cols-2 gap-3" x-show="settings.quiet_hours && settings.quiet_hours.enabled">
+                <div>
+                  <label class="block text-sm mb-1.5 text-sub">Start</label>
+                  <input x-model="settings.quiet_hours.start" type="time"
+                         class="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm tabnum focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+                </div>
+                <div>
+                  <label class="block text-sm mb-1.5 text-sub">End</label>
+                  <input x-model="settings.quiet_hours.end" type="time"
+                         class="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm tabnum focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+                </div>
+              </div>
+              <p class="text-[11px] text-sub mt-2">Quiet hours use server local time.</p>
+            </div>
+            <div class="border-t border-border pt-4">
+              <div class="text-xs uppercase tracking-wider text-sub mb-3 flex items-center gap-2">
+                Toast notifications
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent">this browser</span>
+              </div>
+              <div>
+                <label class="block text-sm mb-1.5 text-sub">Toast duration (ms)</label>
+                <input type="number" :value="prefs.toastDuration" min="1000" step="500"
+                       @change="setPref('toastDuration', parseInt($event.target.value))"
+                       class="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm tabnum focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+              </div>
+              <div class="mt-3">
+                <label class="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" :checked="prefs.toastSound" @change="setPref('toastSound', $event.target.checked)" class="rounded"/>
+                  Enable toast sound
+                </label>
+              </div>
+              <div class="mt-3">
+                <div class="text-sm mb-2 text-sub">Show toast for</div>
+                <div class="space-y-1">
+                  <label class="flex items-center gap-2 text-sm cursor-pointer">
+                    <input type="checkbox" :checked="prefs.toastEvents.includes('listing')"
+                           @change="toggleInArray(prefs.toastEvents, 'listing')" class="rounded"/> New listings
+                  </label>
+                  <label class="flex items-center gap-2 text-sm cursor-pointer">
+                    <input type="checkbox" :checked="prefs.toastEvents.includes('notice')"
+                           @change="toggleInArray(prefs.toastEvents, 'notice')" class="rounded"/> Listing announcements
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Appearance ── -->
+          <div x-show="settingsSection==='appearance'" class="space-y-6">
+            <div class="flex items-center gap-2 text-[10px] text-accent mb-1">
+              <i data-lucide="monitor" class="w-3 h-3"></i>
+              All appearance settings apply to this browser only
+              <span class="px-1.5 py-0.5 rounded bg-accent/15 text-accent">this browser</span>
+            </div>
+            <div>
+              <label class="block text-sm mb-2 text-sub">Theme</label>
+              <div class="flex gap-2 flex-wrap">
+                <template x-for="v in ['dark','light','system']" :key="v">
+                  <button class="btn px-4 py-1.5 rounded-lg border text-sm font-medium capitalize"
+                          :class="prefs.theme===v ? 'border-primary text-fg bg-primary/10' : 'border-border text-sub hover:text-fg'"
+                          @click="setPref('theme', v)" x-text="v"></button>
+                </template>
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm mb-2 text-sub">Accent color</label>
+              <div class="flex gap-2 flex-wrap">
+                <template x-for="v in ['amber','violet','blue','green','rose']" :key="v">
+                  <button class="btn px-4 py-1.5 rounded-lg border text-sm font-medium capitalize"
+                          :class="prefs.accent===v ? 'border-primary text-fg bg-primary/10' : 'border-border text-sub hover:text-fg'"
+                          @click="setPref('accent', v)" x-text="v"></button>
+                </template>
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm mb-2 text-sub">Density</label>
+              <div class="flex gap-2 flex-wrap">
+                <template x-for="v in ['comfortable','compact']" :key="v">
+                  <button class="btn px-4 py-1.5 rounded-lg border text-sm font-medium capitalize"
+                          :class="prefs.density===v ? 'border-primary text-fg bg-primary/10' : 'border-border text-sub hover:text-fg'"
+                          @click="setPref('density', v)" x-text="v"></button>
+                </template>
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm mb-2 text-sub">Font scale</label>
+              <div class="flex gap-2 flex-wrap">
+                <template x-for="v in ['sm','base','lg']" :key="v">
+                  <button class="btn px-4 py-1.5 rounded-lg border text-sm font-medium"
+                          :class="prefs.fontScale===v ? 'border-primary text-fg bg-primary/10' : 'border-border text-sub hover:text-fg'"
+                          @click="setPref('fontScale', v)" x-text="v==='sm'?'Small':v==='lg'?'Large':'Base'"></button>
+                </template>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Display ── -->
+          <div x-show="settingsSection==='display'" class="space-y-5">
+            <div class="flex items-center gap-2 text-[10px] text-accent mb-1">
+              <span class="px-1.5 py-0.5 rounded bg-accent/15 text-accent">this browser</span>
+              All display settings are local to this browser
+            </div>
+            <div>
+              <label class="block text-sm mb-2 text-sub">Time format</label>
+              <div class="flex gap-2 flex-wrap">
+                <template x-for="v in ['local','utc','relative']" :key="v">
+                  <button class="btn px-4 py-1.5 rounded-lg border text-sm font-medium capitalize"
+                          :class="prefs.timeFormat===v ? 'border-primary text-fg bg-primary/10' : 'border-border text-sub hover:text-fg'"
+                          @click="setPref('timeFormat', v)" x-text="v"></button>
+                </template>
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm mb-1.5 text-sub">Table page size (markets)</label>
+              <input type="number" :value="prefs.tablePageSize" min="10" step="25"
+                     @change="setPref('tablePageSize', parseInt($event.target.value)||200)"
+                     class="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm tabnum focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+            </div>
+            <div>
+              <label class="block text-sm mb-2 text-sub">Number format</label>
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs text-sub mb-1">Decimal places</label>
+                  <input type="number" :value="prefs.numberFormat.decimals" min="0" max="8"
+                         @change="setPref('numberFormat', {...prefs.numberFormat, decimals: parseInt($event.target.value)||4})"
+                         class="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm tabnum focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+                </div>
+                <div class="flex items-end pb-2">
+                  <label class="flex items-center gap-2 text-sm cursor-pointer">
+                    <input type="checkbox" :checked="prefs.numberFormat.grouping"
+                           @change="setPref('numberFormat', {...prefs.numberFormat, grouping: $event.target.checked})" class="rounded"/>
+                    Thousands grouping
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm mb-2 text-sub">Default tab on load</label>
+              <div class="flex gap-2 flex-wrap">
+                <template x-for="t in tabs" :key="t.id">
+                  <button class="btn px-4 py-1.5 rounded-lg border text-sm font-medium"
+                          :class="prefs.defaultTab===t.id ? 'border-primary text-fg bg-primary/10' : 'border-border text-sub hover:text-fg'"
+                          @click="setPref('defaultTab', t.id)" x-text="t.label"></button>
+                </template>
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm mb-2 text-sub">Visible tabs</label>
+              <div class="space-y-1">
+                <template x-for="t in tabs" :key="t.id">
+                  <label class="flex items-center gap-2 text-sm cursor-pointer">
+                    <input type="checkbox" :checked="prefs.visibleTabs.includes(t.id)"
+                           @change="toggleInArray(prefs.visibleTabs, t.id)" class="rounded"/>
+                    <span x-text="t.label"></span>
+                  </label>
+                </template>
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm mb-2 text-sub">Visible sidebar cards</label>
+              <div class="space-y-1">
+                <label class="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" :checked="prefs.visibleCards.includes('status')"
+                         @change="toggleInArray(prefs.visibleCards, 'status')" class="rounded"/> Status card
+                </label>
+                <label class="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" :checked="prefs.visibleCards.includes('about')"
+                         @change="toggleInArray(prefs.visibleCards, 'about')" class="rounded"/> About card
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Telegram ── -->
+          <div x-show="settingsSection==='telegram'" class="space-y-5">
+            <div class="flex items-center gap-2 mb-1">
+              <i data-lucide="send" class="w-4 h-4 text-accent"></i>
+              <span class="font-medium text-sm">Telegram bot configuration</span>
+              <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary">affects the bot</span>
+              <span class="text-[11px] px-2 py-0.5 rounded-full"
+                    :class="settings.telegram_configured ? 'bg-ok/15 text-ok' : 'bg-muted text-sub'"
+                    x-text="settings.telegram_configured ? 'configured' : 'not set'"></span>
+            </div>
+            <div>
+              <label class="block text-sm mb-1.5 text-sub">Bot token
+                <span x-show="settings.telegram_token_set" class="text-ok text-[11px]">(saved — leave blank to keep)</span>
+              </label>
+              <input x-model="settings.telegram_token" type="password" placeholder="123456:ABC..."
+                     class="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+            </div>
+            <div>
+              <label class="block text-sm mb-1.5 text-sub">Chat ID</label>
+              <input x-model="settings.telegram_chat_id" placeholder="987654321"
+                     class="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm tabnum focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+            </div>
+            <div>
+              <button class="btn px-4 py-2 rounded-lg border border-border text-sub hover:text-fg text-sm flex items-center gap-1.5" @click="telegramTest()">
+                <i data-lucide="send" class="w-4 h-4"></i> Send test message
+              </button>
+              <p x-show="tgTestResult" class="mt-3 text-xs"
+                 :class="tgTestResult==='ok' ? 'text-ok' : tgTestResult==='sending' ? 'text-sub' : 'text-danger'"
+                 x-text="tgTestResult==='ok' ? '✅ Test message sent — check your Telegram.' : tgTestResult==='sending' ? 'Sending…' : ('❌ '+tgTestResult)"></p>
+            </div>
+            <p class="text-[11px] text-sub">Token and Chat ID are stored in <code class="bg-muted px-1 rounded">.env</code> on the server — they are never returned by the API.</p>
+          </div>
+
+          <!-- ── Reset ── -->
+          <div x-show="settingsSection==='reset'" class="space-y-5">
+            <div class="rounded-xl border border-border bg-muted/30 p-4">
+              <div class="font-medium text-sm mb-1">Reset appearance &amp; display
+                <span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent">this browser</span>
+              </div>
+              <p class="text-[11px] text-sub mb-3">Clears all locally stored theme, accent, density, font scale, display preferences and reloads the page.</p>
+              <button class="btn px-4 py-2 rounded-lg border border-border text-sub hover:text-danger hover:border-danger text-sm"
+                      @click="localStorage.removeItem('upbitwatch.prefs'); location.reload()">
+                Reset local preferences
+              </button>
+            </div>
+            <div class="rounded-xl border border-border bg-muted/30 p-4">
+              <div class="font-medium text-sm mb-1">Reset bot settings to defaults
+                <span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary">affects the bot</span>
+              </div>
+              <p class="text-[11px] text-sub mb-3">Sends the factory defaults to the server (poll_interval 1.0 s, autostart on, Phase 0 offsets 0/10/30/60/300 s, both sources, alerts on, quiet hours off) and reloads settings.</p>
+              <button class="btn px-4 py-2 rounded-lg border border-danger/60 text-danger hover:bg-danger/10 text-sm"
+                      @click="if(confirm('Reset ALL bot settings to defaults? This overwrites config.json.')){
+                        fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+                          poll_interval:1.0, poll_interval_notice:8.0, autostart:true,
+                          phase0_offsets:[0,10,30,60,300],
+                          phase0_sources:{bybit:true,binance:true},
+                          notice_keywords:{listing:['거래지원','디지털 자산 추가','신규 상장','마켓 추가'],exclude:['종료','폐지','유의']},
+                          alert_on_listing:true, alert_on_notice:true, alert_on_error:false,
+                          quiet_hours:{enabled:false,start:'23:00',end:'07:00'}
+                        })}).then(()=>this.loadSettings())
+                      }">
+                Reset to defaults
+              </button>
+            </div>
+          </div>
+
+        </div><!-- /content area -->
+      </div><!-- /body -->
+
+      <!-- Panel footer -->
+      <div class="shrink-0 border-t border-border px-6 py-3 flex items-center gap-3 bg-surface">
+        <button class="btn px-5 py-2 rounded-lg bg-primary text-bg font-semibold text-sm" @click="saveServerSettings()">Save</button>
+        <span x-show="savedFlash" class="text-ok text-sm font-medium">Saved ✓</span>
+        <div class="ml-auto">
+          <button class="btn px-4 py-2 rounded-lg border border-border text-sub hover:text-fg text-sm" @click="closeSettings()">Close</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ===== Toast ===== -->
+  <div x-show="toast" x-cloak class="fixed bottom-5 right-5 z-50 slidein">
+    <div class="rounded-xl border bg-card shadow-xl p-4 w-80" :class="toast && toast.kind==='notice' ? 'border-accent/60' : 'border-primary/60'">
+      <div class="flex items-center gap-2 font-semibold text-sm" :class="toast && toast.kind==='notice' ? 'text-accent' : 'text-primary'">
+        <i data-lucide="bell-ring" class="w-4 h-4"></i>
+        <span x-text="toast && toast.kind==='notice' ? 'Listing announcement' : 'New Upbit listing'"></span>
+      </div>
+      <div class="mt-1 tabnum font-medium" x-text="toast ? (toast.kind==='notice' ? toast.ticker : toast.market) : ''"></div>
+      <div class="text-sm text-sub break-words" x-text="toast ? (toast.kind==='notice' ? toast.title : (toast.english + (toast.korean ? '  ('+toast.korean+')' : ''))) : ''"></div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+  <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+</body>
+</html>

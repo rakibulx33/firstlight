@@ -1,5 +1,23 @@
 .claude/
 .playwright-mcp/
 graphify-out/
-.env
+.superpowers/
 node_modules/
+
+# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Runtime state
+state.db
+state.db-shm
+state.db-wal
+
+# Editor / OS
+*.swp
+Thumbs.db
