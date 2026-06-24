@@ -10,6 +10,17 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+# Use the OS (Windows) certificate store for TLS verification. This trusts the
+# root certs that antivirus/firewall SSL inspection or corporate proxies inject,
+# which certifi's bundle does not include — otherwise outbound HTTPS (Telegram,
+# Upbit, Binance, Bybit) fails with "self-signed certificate in certificate chain".
+try:
+    import truststore
+
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse

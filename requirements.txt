@@ -1,5 +1,6 @@
 fastapi
 uvicorn[standard]
 aiohttp
+truststore
 python-dotenv
 # dev/test (not needed at runtime): pytest, httpx
