@@ -12,7 +12,7 @@
         settingsSection: 'detector',
         savedFlash: false,
         settings: {
-          poll_interval:1.0, poll_interval_notice:8.0,
+          poll_interval:1.0, poll_interval_notice:3.0,
           autostart:true,
           phase0_offsets:[0,10,30,60,300], phase0_offsets_str:'0, 10, 30, 60, 300',
           phase0_sources:{bybit:true, binance:true},

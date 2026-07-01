@@ -87,7 +87,7 @@
           <div class="badges">
             <span class="badge"><b>FastAPI</b> + WebSocket</span>
             <span class="badge"><b>Loop A</b> markets · 1s</span>
-            <span class="badge"><b>Loop B</b> announcements · 8s</span>
+            <span class="badge"><b>Loop B</b> announcements · 3s</span>
             <span class="badge"><b>Phase 0</b> price snapshots</span>
             <span class="badge"><b>SQLite</b> WAL · survives restarts</span>
             <span class="badge"><b>Telegram</b> alerts</span>
@@ -134,7 +134,7 @@
                 </div>
               </div>
               <div class="flow-row">
-                <div class="node b">Loop B — NoticePoller <small>Upbit announcements · every 8s</small></div>
+                <div class="node b">Loop B — NoticePoller <small>Upbit announcements · every 3s</small></div>
                 <span class="arrow">↗</span>
               </div>
               <div class="flow-row">
@@ -146,7 +146,7 @@
 
           <div class="cards">
             <div class="fcard"><div class="fic">🎯</div><h4>Loop A — markets</h4><p>Polls the tradable-market list every second. Primary, rock-solid signal.</p></div>
-            <div class="fcard"><div class="fic">📢</div><h4>Loop B — announcements</h4><p>Polls the notice feed every 8s. Early warning — often fires <em>before</em> Loop A.</p></div>
+            <div class="fcard"><div class="fic">📢</div><h4>Loop B — announcements</h4><p>Polls the notice feed every 3s. Early warning — often fires <em>before</em> Loop A.</p></div>
             <div class="fcard"><div class="fic">📈</div><h4>Phase 0 — snapshots</h4><p>Captures price at +0/10/30/60s/5m on Bybit + Binance to measure the pump.</p></div>
             <div class="fcard"><div class="fic">🖥️</div><h4>Live dashboard</h4><p>Status, feeds, logs, markets table, and chart — all updating over WebSocket.</p></div>
           </div>
@@ -403,7 +403,7 @@ TELEGRAM_CHAT_ID=987654321</code></pre>
 
           <h3>8.2 · Loop B — announcement detection <code>(notice.py → NoticePoller)</code></h3>
           <ul>
-            <li>Polls the announcements API every <code>poll_interval_notice</code> (default <strong>8s</strong>) with a <strong>browser User-Agent</strong> (the endpoint is behind Cloudflare). Dedup key is the announcement <strong>id</strong>; same seed-silent-then-alert logic, stored in <code>notices</code>.</li>
+            <li>Polls the announcements API every <code>poll_interval_notice</code> (default <strong>3s</strong>) with a <strong>browser User-Agent</strong> (the endpoint is behind Cloudflare). Dedup key is the announcement <strong>id</strong>; same seed-silent-then-alert logic, stored in <code>notices</code>.</li>
             <li><code>parse_notice(title)</code> classifies:
               <ul>
                 <li><strong>Ticker</strong> = first <code>(UPPERCASE)</code> group, e.g. <code>에스피엑스6900(SPX) …</code> → <code>SPX</code>.</li>
@@ -455,7 +455,7 @@ TELEGRAM_CHAT_ID=987654321</code></pre>
               <thead><tr><th>Key</th><th>Default</th><th>Meaning</th></tr></thead>
               <tbody>
                 <tr><td><code>poll_interval</code></td><td><code>1.0</code></td><td>Loop A seconds between polls (1/s is within Upbit's limit)</td></tr>
-                <tr><td><code>poll_interval_notice</code></td><td><code>8.0</code></td><td>Loop B seconds between polls (keep ≥3s to avoid Cloudflare 429)</td></tr>
+                <tr><td><code>poll_interval_notice</code></td><td><code>3.0</code></td><td>Loop B seconds between polls (keep ≥3s to avoid Cloudflare 429)</td></tr>
                 <tr><td><code>autostart</code></td><td><code>true</code></td><td>Arm both loops automatically when the app launches</td></tr>
                 <tr><td><code>phase0_offsets</code></td><td><code>[0,10,30,60,300]</code></td><td>Seconds after a listing at which Phase 0 snapshots the price</td></tr>
                 <tr><td><code>phase0_sources</code></td><td><code>{bybit,binance}</code></td><td>Which exchanges Phase 0 queries (each on/off)</td></tr>
