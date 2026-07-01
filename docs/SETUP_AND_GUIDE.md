@@ -13,7 +13,7 @@ Two independent detectors run together and feed one dashboard:
 | | Source | Speed | Reliability |
 |---|---|---|---|
 | **Loop A** | `api.upbit.com/v1/market/all` (the tradable-market list) | polls every **1 s** | **Primary** — rock solid |
-| **Loop B** | `api-manager.upbit.com/.../announcements` (the notice feed) | polls every **8 s** | **Early-warning** — best-effort (Cloudflare may 429 a home IP) |
+| **Loop B** | `api-manager.upbit.com/.../announcements` (the notice feed) | polls every **3 s** | **Early-warning** — best-effort (Cloudflare may 429 a home IP) |
 
 Plus **Phase 0**: on each detected listing it snapshots the coin's price on Bybit (primary) and
 Binance (best-effort) at **+0 / 10 / 30 / 60 s / 5 m** and charts it — the dataset that tells you
@@ -139,7 +139,7 @@ Loop B usually fires first; Loop A confirms the market is actually tradable.
 | Key | Default | Meaning |
 |---|---|---|
 | `poll_interval` | `1.0` | Loop A seconds between polls (1/s is within Upbit's limit) |
-| `poll_interval_notice` | `8.0` | Loop B seconds between polls (keep ≥3 s to avoid Cloudflare 429) |
+| `poll_interval_notice` | `3.0` | Loop B seconds between polls (keep ≥3 s to avoid Cloudflare 429) |
 | `autostart` | `true` | Arm both loops automatically when the app launches |
 
 `.env` — `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.

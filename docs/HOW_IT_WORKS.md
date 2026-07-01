@@ -16,8 +16,8 @@ and pushes everything live to a browser dashboard over a WebSocket.
   Upbit market/all  ──▶  │  Loop A: DetectorEngine ─┐                                                │
   (every 1s)             │                          │                                                │
                           │  Loop B: NoticePoller  ──┼──▶  EventBus (async pub/sub) ──▶  /ws  ──▶ Browser dashboard
-  Upbit announcements ─▶  │  (every 8s)              │            │                                   │   (static/index.html)
-  (every 8s)             │                          │            ├──▶ Telegram (notify.py)           │
+  Upbit announcements ─▶  │  (every 3s)              │            │                                   │   (static/index.html)
+  (every 3s)             │                          │            ├──▶ Telegram (notify.py)           │
                           │  Phase 0: Phase0 ────────┘            └──▶ SQLite state.db (WAL)          │
   Bybit / Binance   ──▶  │  (on each new listing)                                                     │
                           │                                                                          │
@@ -91,7 +91,7 @@ endpoint `subscribe()`s and forwards them. Detectors never know about the browse
 
 ### 4.2 Loop B — announcement detection (`notice.py` → `NoticePoller`)
 - Polls `https://api-manager.upbit.com/api/v1/announcements?...&category=trade` every
-  `poll_interval_notice` (default **8s**) with a **browser `User-Agent`** (the endpoint is behind
+  `poll_interval_notice` (default **3s**) with a **browser `User-Agent`** (the endpoint is behind
   Cloudflare).
 - Dedup key is the announcement **`id`**. Same seed-silent-then-alert logic, stored in `notices`.
 - `parse_notice(title)` does the classification:

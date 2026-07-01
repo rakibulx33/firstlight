@@ -38,7 +38,7 @@ ENV_PATH = BASE / ".env"
 
 CONFIG_DEFAULTS = {
     "poll_interval": 1.0,
-    "poll_interval_notice": 8.0,
+    "poll_interval_notice": 3.0,
     "autostart": True,
     "phase0_offsets": [0, 10, 30, 60, 300],
     "phase0_sources": {"bybit": True, "binance": True},
@@ -234,7 +234,7 @@ async def api_logs():
 async def api_get_settings():
     return {
         "poll_interval": float(config.get("poll_interval", 1.0)),
-        "poll_interval_notice": float(config.get("poll_interval_notice", 8.0)),
+        "poll_interval_notice": float(config.get("poll_interval_notice", 3.0)),
         "autostart": bool(config.get("autostart", True)),
         "phase0_offsets": list(config.get("phase0_offsets", CONFIG_DEFAULTS["phase0_offsets"])),
         "phase0_sources": dict(config.get("phase0_sources", CONFIG_DEFAULTS["phase0_sources"])),

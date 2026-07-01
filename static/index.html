@@ -683,7 +683,7 @@
               <button class="btn px-4 py-2 rounded-lg border border-danger/60 text-danger hover:bg-danger/10 text-sm"
                       @click="if(confirm('Reset ALL bot settings to defaults? This overwrites config.json.')){
                         fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-                          poll_interval:1.0, poll_interval_notice:8.0, autostart:true,
+                          poll_interval:1.0, poll_interval_notice:3.0, autostart:true,
                           phase0_offsets:[0,10,30,60,300],
                           phase0_sources:{bybit:true,binance:true},
                           notice_keywords:{listing:['거래지원','디지털 자산 추가','신규 상장','마켓 추가'],exclude:['종료','폐지','유의']},
