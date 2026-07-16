@@ -7,6 +7,7 @@
         connected: false, busy: false,
         status: { running:false, uptime_s:null, last_poll_ts:null, last_latency_ms:null, markets_count:0, poll_count:0, error_count:0, poll_interval:1.0, last_error:null },
         exchangeStatuses: {}, // {binance:{...}, bithumb:{...}, coinbase:{...}} — keyed status events, upbit stays in `status`
+        fastFeed: { configured:false, running:false, connected:{tokyo:false,seoul:false}, message_count:0, listing_count:0, error_count:0, last_message_ts:null, last_error:null },
         listings: [], logs: [], markets: [], marketFilter: '', exchangeFilter: 'all', notices: [],
         subscribers: [], newSub: { chat_id:'', name:'', tier:'free' }, subError: null,
         tab: 'live', tabs: [{id:'live',label:'Live'},{id:'announce',label:'Announce'},{id:'markets',label:'Markets'},{id:'phase0',label:'Phase 0'},{id:'subscribers',label:'Subscribers'}],
@@ -24,14 +25,15 @@
           alert_on_listing:true, alert_on_notice:true, alert_on_error:false,
           quiet_hours:{enabled:false, start:'23:00', end:'07:00'},
           subscriber_tiers:{instant:0, delayed:30, free:120}, tiersRows:[],
-          telegram_chat_id:'', telegram_token:'', telegram_token_set:false, telegram_configured:false
+          telegram_chat_id:'', telegram_token:'', telegram_token_set:false, telegram_configured:false,
+          coinlisting_api_key:'', coinlisting_configured:false
         },
         tgTestResult: null,
         snapMarket: '', snapMarkets: [], snapshots: [],
         toast: null,
         prefs: { theme:'dark', accent:'amber', density:'comfortable', fontScale:'base',
                  defaultTab:'live', visibleTabs:['live','announce','markets','phase0','subscribers'],
-                 visibleCards:['status','about','exchanges'], timeFormat:'local', tablePageSize:200,
+                 visibleCards:['status','about','exchanges','fastfeed'], timeFormat:'local', tablePageSize:200,
                  numberFormat:{decimals:4, grouping:true}, favorites:[],
                  toastDuration:6000, toastSound:false, toastEvents:['listing','notice'] },
         loadPrefs(){ try{ this.prefs = { ...this.prefs, ...JSON.parse(localStorage.getItem('upbitwatch.prefs')||'{}') }; }catch(e){} },
@@ -71,8 +73,9 @@
           };
           if(s.telegram_token) body.telegram_token = s.telegram_token;
           if(s.telegram_chat_id != null && String(s.telegram_chat_id).trim() !== '') body.telegram_chat_id = s.telegram_chat_id;
+          if(s.coinlisting_api_key) body.coinlisting_api_key = s.coinlisting_api_key;
           const res = await (await fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
-          this.settings = { ...this.settings, ...res, telegram_token:'',
+          this.settings = { ...this.settings, ...res, telegram_token:'', coinlisting_api_key:'',
             phase0_offsets_str: (res.phase0_offsets||[]).join(', '),
             kw_listing_str: (res.notice_keywords?.listing||[]).join(', '),
             kw_exclude_str: (res.notice_keywords?.exclude||[]).join(', ') };
@@ -123,11 +126,17 @@
           }
         },
 
-        async refreshAll() { await Promise.all([this.loadStatus(), this.loadExchanges(), this.loadListings(), this.loadNotices(), this.loadLogs(), this.loadMarkets(), this.loadSettings(), this.loadSubscribers()]); },
+        async refreshAll() { await Promise.all([this.loadStatus(), this.loadExchanges(), this.loadFastFeed(), this.loadListings(), this.loadNotices(), this.loadLogs(), this.loadMarkets(), this.loadSettings(), this.loadSubscribers()]); },
         async loadStatus() { this.status = await (await fetch('/api/status')).json(); },
         async loadExchanges() {
           const rows = await (await fetch('/api/exchanges')).json();
           for (const r of rows) if (r.exchange !== 'upbit') this.exchangeStatuses[r.exchange] = r;
+        },
+        async loadFastFeed() { this.fastFeed = await (await fetch('/api/fastfeed')).json(); },
+        async fastFeedCtrl(action) {
+          this.busy = true;
+          try { const r = await fetch('/api/fastfeed/' + action, { method:'POST' }); const j = await r.json(); if (j.status) this.fastFeed = j.status; }
+          finally { this.busy = false; }
         },
         async loadListings() {
           const q = this.exchangeFilter !== 'all' ? ('?exchange=' + encodeURIComponent(this.exchangeFilter)) : '';
@@ -171,7 +180,7 @@
         async exchangeSimulate(id) { await fetch('/api/exchanges/' + id + '/simulate', { method:'POST' }); setTimeout(() => { this.loadSnapshotMarkets(); }, 1500); },
         async loadSettings() {
           const s = await (await fetch('/api/settings')).json();
-          this.settings = { ...this.settings, ...s, telegram_token: '' };
+          this.settings = { ...this.settings, ...s, telegram_token: '', coinlisting_api_key: '' };
           // Ensure nested objects are proper objects after merge
           if(!this.settings.phase0_sources || typeof this.settings.phase0_sources !== 'object') {
             this.settings.phase0_sources = {bybit:true, binance:true};

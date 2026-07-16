@@ -80,6 +80,27 @@ py -3 -m venv .venv
 
 ---
 
+## 4a. Fast feed setup (optional — coinlisting.pro)
+
+An optional third-party WebSocket signal source that layers on top of the built-in exchange
+pollers for potentially faster detection. Not required — the bot works fully without it.
+
+1. Paste your API key into **Settings → Fast Feed** and click **Save** (it's written to `.env` as
+   `COINLISTING_API_KEY`, same as the Telegram token — never returned by the API, never written to
+   `config.json`, never committed to git).
+2. Hit **Start** on the Fast Feed sidebar card (or the top-bar Start, which now starts it too).
+3. Watch the **Logs** tab for `Fast feed connected (tokyo)` / `(seoul)` and, once a listing comes
+   through, `Fast feed signal: [...]`. A listing detected here fires the exact same alert path as
+   one detected by polling — whichever source sees it first wins, no duplicate alerts.
+
+> ⚠️ **The message schema wasn't documented anywhere available when this was built** — only the
+> provider's marketing/pricing page, no example payloads. Parsing (`coinlisting.py`'s
+> `parse_message`) is a best-effort guess at common field names. If the feed connects but the Logs
+> tab never shows a "Fast feed signal" line despite listings happening, the guessed field names are
+> probably wrong for the real message shape — that function is the one place to fix.
+
+---
+
 ## 5. Running
 
 Easiest — double-click one of these:
@@ -163,7 +184,8 @@ alert is sent once per enabled subscriber, delayed by that subscriber's assigned
 | `subscriber_tiers` | `{"instant":0,"delayed":30,"free":120}` | Tier name → alert delay in seconds; assign a subscriber's tier from the Subscribers tab |
 
 `.env` — `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (legacy single-recipient fallback, auto-migrated
-into the first Subscribers row on first boot after upgrading).
+into the first Subscribers row on first boot after upgrading), `COINLISTING_API_KEY` (optional
+fast feed, see §4a).
 
 ---
 
@@ -171,11 +193,13 @@ into the first Subscribers row on first boot after upgrading).
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/start` `/api/stop` `/api/restart` | control all four exchange engines |
+| POST | `/api/start` `/api/stop` `/api/restart` | control all four exchange engines + the fast feed |
 | GET | `/api/status` | Upbit engine's full status (incl. `loop_b`) |
 | GET | `/api/exchanges` | status for all four exchange engines |
 | POST | `/api/exchanges/{id}/start` `/stop` `/restart` | control one exchange engine |
 | POST | `/api/exchanges/{id}/simulate` | dev: fire a fake listing on one exchange |
+| GET | `/api/fastfeed` | fast feed (coinlisting.pro) status |
+| POST | `/api/fastfeed/start` `/stop` `/restart` | control the fast feed independently |
 | GET | `/api/listings?exchange=` | detected markets, optionally filtered |
 | GET | `/api/notices` | Upbit announcements (Loop B) |
 | GET | `/api/markets?exchange=` | all tracked markets, optionally filtered |
@@ -205,6 +229,13 @@ Interactive docs: `http://localhost:8000/docs`.
   independently, and doesn't affect Upbit detection. Raise that exchange's poll interval in Settings.
 - **A subscriber isn't getting alerts** — check they're `enabled` in the Subscribers tab and that
   their assigned tier has the delay you expect (Settings → Tiers).
+- **Fast Feed shows "connected" but never produces a signal** — the message schema was guessed
+  (see §4a); watch the Logs tab, and if real listings never produce a `Fast feed signal: [...]`
+  line, `coinlisting.py`'s `parse_message` needs its field-name guesses corrected against a real
+  message.
+- **Changed the Fast Feed key but it's still using the old one** — hit **Restart** (top bar or the
+  Fast Feed card); the key only takes effect on the next connection attempt, not retroactively on
+  an already-open socket.
 - **Browser can't reach localhost:8000** — make sure the server window is still running and that it
   bound to `127.0.0.1:8000`.
 - **Want a clean slate** — `del state.db state.db-shm state.db-wal` (removes the WAL sidecar files

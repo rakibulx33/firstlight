@@ -257,6 +257,21 @@ class DetectorEngine:
         for t in tasks:
             t.add_done_callback(self._notify_tasks.discard)
 
+    async def handle_signal(self, market: str, info: dict) -> None:
+        """Push-based signal for this exchange from an external fast feed (e.g.
+        coinlisting.pro), as opposed to this engine's own poll loop noticing the
+        diff. Goes through the same dedup check the poll loop relies on (`seen`),
+        so whichever source -- this engine's own poll or the external feed --
+        notices a listing first fires the alert; the second is a no-op.
+        """
+        with self._conn() as db:
+            already = db.execute(
+                "SELECT 1 FROM seen WHERE exchange=? AND market=?", (self.exchange, market)
+            ).fetchone()
+        if already:
+            return
+        await self._handle_new(market, info, utcnow_iso())
+
     async def _handle_new(self, market: str, info: dict, now: str) -> None:
         base = info.get("base") or market
         english = info.get("display_en", "")

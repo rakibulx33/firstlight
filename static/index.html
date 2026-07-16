@@ -180,6 +180,38 @@
         </div>
       </section>
 
+      <section x-show="prefs.visibleCards.includes('fastfeed')" class="rounded-2xl border border-border bg-card p-5">
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-xs uppercase tracking-wider text-sub">Fast Feed <span class="normal-case text-[10px] text-sub/70">· 3rd-party</span></span>
+          <span class="text-[10px] px-1.5 py-0.5 rounded-full"
+                :class="fastFeed.configured ? (fastFeed.running ? 'bg-ok/15 text-ok' : 'bg-muted text-sub') : 'bg-muted text-sub'"
+                x-text="!fastFeed.configured ? 'no key' : (fastFeed.running ? 'on' : 'off')"></span>
+        </div>
+        <template x-if="!fastFeed.configured">
+          <p class="text-[11px] text-sub">No API key set — add one in Settings → Fast Feed to enable.</p>
+        </template>
+        <template x-if="fastFeed.configured">
+          <div>
+            <div class="flex items-center gap-3 text-[11px] text-sub mb-2">
+              <span class="flex items-center gap-1"><span class="h-1.5 w-1.5 rounded-full" :class="fastFeed.connected && fastFeed.connected.tokyo ? 'bg-ok live-dot' : 'bg-sub'"></span>tokyo</span>
+              <span class="flex items-center gap-1"><span class="h-1.5 w-1.5 rounded-full" :class="fastFeed.connected && fastFeed.connected.seoul ? 'bg-ok live-dot' : 'bg-sub'"></span>seoul</span>
+            </div>
+            <div class="grid grid-cols-3 gap-2 text-center mb-3">
+              <div class="rounded-lg bg-muted/50 p-2"><div class="text-[10px] text-sub">Messages</div><div class="text-sm font-semibold tabnum" x-text="fastFeed.message_count ?? 0"></div></div>
+              <div class="rounded-lg bg-muted/50 p-2"><div class="text-[10px] text-sub">Signals</div><div class="text-sm font-semibold tabnum text-primary" x-text="fastFeed.listing_count ?? 0"></div></div>
+              <div class="rounded-lg bg-muted/50 p-2"><div class="text-[10px] text-sub">Errors</div><div class="text-sm font-semibold tabnum" :class="fastFeed.error_count ? 'text-danger' : ''" x-text="fastFeed.error_count ?? 0"></div></div>
+            </div>
+            <p x-show="fastFeed.last_error" class="text-[11px] text-danger/90 break-words mb-2" x-text="'⚠ ' + (fastFeed.last_error||'')"></p>
+            <div class="flex items-center gap-1.5">
+              <button class="btn flex-1 px-2 py-1 rounded-lg border border-border text-[11px] text-sub hover:text-fg disabled:opacity-40"
+                      :disabled="fastFeed.running" @click="fastFeedCtrl('start')">Start</button>
+              <button class="btn flex-1 px-2 py-1 rounded-lg border border-border text-[11px] text-sub hover:text-fg disabled:opacity-40"
+                      :disabled="!fastFeed.running" @click="fastFeedCtrl('stop')">Stop</button>
+            </div>
+          </div>
+        </template>
+      </section>
+
       <section x-show="prefs.visibleCards.includes('about')" class="rounded-2xl border border-border bg-card p-5">
         <div class="text-xs uppercase tracking-wider text-sub mb-2">About</div>
         <p class="text-sm text-sub leading-relaxed">
@@ -480,6 +512,11 @@
             <i data-lucide="users" class="w-4 h-4 shrink-0"></i> Tiers
           </button>
           <button class="btn w-full text-left px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+                  :class="settingsSection==='fastfeed' ? 'bg-primary/15 text-primary' : 'text-sub hover:text-fg hover:bg-muted/50'"
+                  @click="settingsSection='fastfeed'">
+            <i data-lucide="zap" class="w-4 h-4 shrink-0"></i> Fast Feed
+          </button>
+          <button class="btn w-full text-left px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
                   :class="settingsSection==='reset' ? 'bg-primary/15 text-primary' : 'text-sub hover:text-fg hover:bg-muted/50'"
                   @click="settingsSection='reset'">
             <i data-lucide="rotate-ccw" class="w-4 h-4 shrink-0"></i> Reset
@@ -762,6 +799,10 @@
                          @change="toggleInArray(prefs.visibleCards, 'exchanges')" class="rounded"/> Exchanges card
                 </label>
                 <label class="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" :checked="prefs.visibleCards.includes('fastfeed')"
+                         @change="toggleInArray(prefs.visibleCards, 'fastfeed')" class="rounded"/> Fast Feed card
+                </label>
+                <label class="flex items-center gap-2 text-sm cursor-pointer">
                   <input type="checkbox" :checked="prefs.visibleCards.includes('about')"
                          @change="toggleInArray(prefs.visibleCards, 'about')" class="rounded"/> About card
                 </label>
@@ -827,6 +868,33 @@
                  x-text="tgTestResult==='ok' ? '✅ Test message sent — check your Telegram.' : tgTestResult==='sending' ? 'Sending…' : ('❌ '+tgTestResult)"></p>
             </div>
             <p class="text-[11px] text-sub">Token and Chat ID are stored in <code class="bg-muted px-1 rounded">.env</code> on the server — they are never returned by the API.</p>
+          </div>
+
+          <!-- ── Fast Feed ── -->
+          <div x-show="settingsSection==='fastfeed'" class="space-y-5">
+            <div class="flex items-center gap-2 mb-1">
+              <i data-lucide="zap" class="w-4 h-4 text-accent"></i>
+              <span class="font-medium text-sm">Fast feed (coinlisting.pro)</span>
+              <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary">affects the bot</span>
+              <span class="text-[11px] px-2 py-0.5 rounded-full"
+                    :class="settings.coinlisting_configured ? 'bg-ok/15 text-ok' : 'bg-muted text-sub'"
+                    x-text="settings.coinlisting_configured ? 'configured' : 'not set'"></span>
+            </div>
+            <p class="text-[11px] text-sub">
+              Optional third-party WebSocket signal source, layered on top of the built-in exchange
+              pollers — a listing seen here fires the same alert path as a poll-detected one, and
+              whichever source sees it first wins (no duplicate alerts).
+            </p>
+            <div>
+              <label class="block text-sm mb-1.5 text-sub">API key
+                <span x-show="settings.coinlisting_configured" class="text-ok text-[11px]">(saved — leave blank to keep)</span>
+              </label>
+              <input x-model="settings.coinlisting_api_key" type="password" placeholder="your-coinlisting-key"
+                     class="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+            </div>
+            <p class="text-[11px] text-sub">Stored in <code class="bg-muted px-1 rounded">.env</code> on the server — never returned by the API, never written to <code class="bg-muted px-1 rounded">config.json</code>.
+              Save, then use the Fast Feed sidebar card (or <b>Start</b> above) to connect — changing the key while already connected needs a <b>Restart</b> to take effect.</p>
+            <p class="text-[11px] text-sub">Connects to both the Tokyo and Seoul endpoints (Seoul carries Upbit, Tokyo carries the rest, per the provider's own routing guidance). Message field names weren't documented at integration time, so parsing is best-effort — watch the Logs tab after connecting to confirm real listings are being recognized.</p>
           </div>
 
           <!-- ── Reset ── -->

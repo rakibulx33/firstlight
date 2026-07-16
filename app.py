@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 
 import storage
 import subscribers as subs_store
+from coinlisting import CoinListingFeed
 from detector import DetectorEngine, EventBus
 from exchanges import EXCHANGES
 from notice import NoticePoller
@@ -195,6 +196,14 @@ notice_poller = NoticePoller(
 )
 engine.notice_poller = notice_poller
 
+# Optional fast-path signal source (coinlisting.pro) layered on top of the exchange
+# engines -- only connects if COINLISTING_API_KEY is set (never stored in config.json,
+# same secrets-in-.env pattern as the Telegram token). See coinlisting.py for the
+# schema caveat: field names are a best-effort guess, unverified against a live message.
+coinlisting_feed = CoinListingFeed(
+    engines, config, bus=bus, logger=engine.log, api_key=os.getenv("COINLISTING_API_KEY")
+)
+
 
 @asynccontextmanager
 async def lifespan(app):
@@ -202,11 +211,13 @@ async def lifespan(app):
     if config.get("autostart", True):
         for eng in engines.values():
             await eng.start()
+        await coinlisting_feed.start()  # no-op if not configured
     # Re-arm any Phase 0 collections interrupted by the restart (capture remaining offsets).
     phase0.resume_pending()
     yield
     for eng in engines.values():
         await eng.stop()
+    await coinlisting_feed.stop()
 
 
 app = FastAPI(title="Upbit Watch", lifespan=lifespan)
@@ -222,6 +233,7 @@ async def index():
 async def api_start():
     for eng in engines.values():
         await eng.start()
+    await coinlisting_feed.start()
     return {"ok": True, "status": engine.status()}
 
 
@@ -229,6 +241,7 @@ async def api_start():
 async def api_stop():
     for eng in engines.values():
         await eng.stop()
+    await coinlisting_feed.stop()
     return {"ok": True, "status": engine.status()}
 
 
@@ -236,7 +249,31 @@ async def api_stop():
 async def api_restart():
     for eng in engines.values():
         await eng.restart()
+    await coinlisting_feed.restart()
     return {"ok": True, "status": engine.status()}
+
+
+@app.get("/api/fastfeed")
+async def api_fastfeed_status():
+    return coinlisting_feed.status()
+
+
+@app.post("/api/fastfeed/start")
+async def api_fastfeed_start():
+    await coinlisting_feed.start()
+    return {"ok": True, "status": coinlisting_feed.status()}
+
+
+@app.post("/api/fastfeed/stop")
+async def api_fastfeed_stop():
+    await coinlisting_feed.stop()
+    return {"ok": True, "status": coinlisting_feed.status()}
+
+
+@app.post("/api/fastfeed/restart")
+async def api_fastfeed_restart():
+    await coinlisting_feed.restart()
+    return {"ok": True, "status": coinlisting_feed.status()}
 
 
 @app.get("/api/status")
@@ -387,6 +424,7 @@ async def api_get_settings():
         "telegram_chat_id": telegram.chat_id or "",
         "telegram_token_set": bool(telegram.token),
         "telegram_configured": telegram.configured(),
+        "coinlisting_configured": coinlisting_feed.configured(),
     }
 
 
@@ -405,6 +443,10 @@ async def api_put_settings(request: Request):
     if chat_id:
         telegram.chat_id = chat_id
         persist_env("TELEGRAM_CHAT_ID", chat_id)
+    coinlisting_key = (body.get("coinlisting_api_key") or "").strip()
+    if coinlisting_key:
+        coinlisting_feed.api_key = coinlisting_key
+        persist_env("COINLISTING_API_KEY", coinlisting_key)
     engine.log("info", "Settings updated")
     return await api_get_settings()
 

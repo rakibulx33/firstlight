@@ -44,6 +44,9 @@ Three facts make the whole thing reliable:
    subscriber with that subscriber's tier delay — a slow (high-delay-tier) subscriber never blocks
    the poll loop, other subscribers, or Phase 0 scheduling.
 
+Optionally, `coinlisting.py`'s `CoinListingFeed` layers a third-party push (WebSocket) signal
+source on top of the four poll-based engines — see §4.10.
+
 ---
 
 ## 2. Components (which file does what)
@@ -56,6 +59,7 @@ Three facts make the whole thing reliable:
 | `notice.py` | **Loop B** announcement poller (Upbit only) | `NoticePoller`, `parse_notice` |
 | `phase0.py` | Price-snapshot logger after a listing | `Phase0` |
 | `notify.py` | Telegram sender (raw Bot API) | `Telegram` |
+| `coinlisting.py` | Optional 3rd-party fast-feed WebSocket client | `CoinListingFeed`, `parse_message` |
 | `broadcast.py` | Per-subscriber, per-tier-delay fan-out | `fanout()` |
 | `subscribers.py` | Telegram subscriber CRUD + legacy chat_id migration | `list/add/update/remove_subscriber`, `ensure_legacy_migrated` |
 | `storage.py` | Schema init + migration to the multi-exchange/subscriber schema | `init_schema` |
@@ -202,8 +206,31 @@ shared by all four:
 - On load it fetches initial state via REST, then opens `/ws` and updates reactively on each
   event (auto-reconnecting if the socket drops).
 - Tabs: **Live** (listings feed + log console), **Announce** (Loop B feed, listings highlighted),
-  **Markets** (searchable table), **Phase 0** (price chart + Simulate button). The status sidebar
-  shows Loop A metrics and a Loop B sub-panel. Settings is a slide-over drawer.
+  **Markets** (searchable table), **Phase 0** (price chart + Simulate button), **Subscribers**.
+  The status sidebar shows Loop A metrics, a Loop B sub-panel, an Exchanges panel, and a Fast Feed
+  panel. Settings is a slide-over drawer.
+
+### 4.10 Fast feed — optional 3rd-party WebSocket signal (`coinlisting.py` → `CoinListingFeed`)
+- Connects to **both** `wss://tokyo.coinlisting.pro/listings` and
+  `wss://seoul.coinlisting.pro/listings` simultaneously (per the provider's own routing guidance:
+  Seoul carries Upbit listings, Tokyo carries everything else), only if `COINLISTING_API_KEY` is
+  set in `.env` (`configured()` mirrors `Telegram.configured()`'s pattern — never stored in
+  `config.json`, so it can't end up committed to git).
+- **Schema caveat:** the exact message shape wasn't documented anywhere available at integration
+  time (only the provider's marketing/pricing page) — `parse_message()` is a best-effort, defensive
+  guess at common field names (`exchange`/`venue`/`source`, `market`/`symbol`/`ticker`/`pair`,
+  etc.), tried under several aliases. A message that doesn't parse is skipped, not fatal. **Verify
+  against a real message and adjust `parse_message()`'s field-name guesses if they're wrong** — the
+  Logs tab will show "Fast feed signal: [...]" lines for every recognized listing, so a feed that's
+  connected but never producing signals is the tell that the guessed field names need correcting.
+- Each parsed message is routed by its own `exchange` field to the matching `DetectorEngine`
+  (`engines[exchange]`) and goes through `DetectorEngine.handle_signal()` — the same dedup (`seen`
+  table) and alert/broadcast/Phase0 path a poll-detected listing uses, so whichever source (this
+  feed or the exchange's own poller) notices a listing first fires the alert; the other is a no-op.
+- Reconnects with exponential backoff (capped at 30s) per socket independently; a parse error or
+  dropped connection is logged and counted, never fatal to the process.
+- Controlled the same way as the exchange engines: `/api/fastfeed`, `/api/fastfeed/start|stop|restart`,
+  and included in the top-bar `/api/start|stop|restart` (all-together) calls.
 
 ---
 
@@ -248,6 +275,8 @@ non-Upbit `status` events into a separate `exchangeStatuses` map instead of the 
 | `GET /api/exchanges` | Exchanges sidebar panel (initial load) |
 | `POST /api/exchanges/{id}/start\|stop\|restart` | Exchanges panel per-exchange buttons |
 | `POST /api/exchanges/{id}/simulate` | Exchanges panel simulate button |
+| `GET /api/fastfeed` | Fast Feed sidebar panel (initial load) |
+| `POST /api/fastfeed/start\|stop\|restart` | Fast Feed panel buttons |
 | `GET /api/listings?exchange=` | Live tab feed |
 | `GET /api/notices` | Announce tab feed |
 | `GET /api/markets?exchange=` | Markets tab table |
@@ -284,6 +313,8 @@ non-Upbit `status` events into a separate `exchangeStatuses` map instead of the 
 | Binance geo-blocked (Phase 0 price source) | Phase 0 stores `NULL` for Binance; Bybit still recorded |
 | Bithumb/Coinbase response shape drifts from what's assumed | parser logs a warning and skips the malformed entry rather than crashing the poll loop |
 | A subscriber's delayed-tier alert is slow to send | fire-and-forget `asyncio.Task` per subscriber — never blocks detection or other subscribers |
+| Fast feed (coinlisting.pro) drops or won't connect | reconnects with backoff (capped 30s) per socket; other detection sources unaffected |
+| Fast feed message doesn't match the guessed schema | `parse_message` returns `None`, message is skipped — no crash, but also no alert from that source (verify field names against a real message) |
 | Process restart / reboot | dedup persists (WAL, per exchange) → no re-seed, no false alerts; `state.db` migrated once if upgrading; autostart re-arms |
 | PC sleep | process pauses → bot pauses; relaunch (autostart) resumes |
 | Slow/stuck browser | its event queue drops overflow; detectors never block |
