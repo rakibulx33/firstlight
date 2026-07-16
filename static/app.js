@@ -6,13 +6,16 @@
       return {
         connected: false, busy: false,
         status: { running:false, uptime_s:null, last_poll_ts:null, last_latency_ms:null, markets_count:0, poll_count:0, error_count:0, poll_interval:1.0, last_error:null },
-        listings: [], logs: [], markets: [], marketFilter: '', notices: [],
-        tab: 'live', tabs: [{id:'live',label:'Live'},{id:'announce',label:'Announce'},{id:'markets',label:'Markets'},{id:'phase0',label:'Phase 0'}],
+        exchangeStatuses: {}, // {binance:{...}, bithumb:{...}, coinbase:{...}} — keyed status events, upbit stays in `status`
+        listings: [], logs: [], markets: [], marketFilter: '', exchangeFilter: 'all', notices: [],
+        subscribers: [], newSub: { chat_id:'', name:'', tier:'free' }, subError: null,
+        tab: 'live', tabs: [{id:'live',label:'Live'},{id:'announce',label:'Announce'},{id:'markets',label:'Markets'},{id:'phase0',label:'Phase 0'},{id:'subscribers',label:'Subscribers'}],
         settingsOpen: false,
         settingsSection: 'detector',
         savedFlash: false,
         settings: {
           poll_interval:1.0, poll_interval_notice:3.0,
+          poll_interval_binance:5.0, poll_interval_bithumb:5.0, poll_interval_coinbase:5.0,
           autostart:true,
           phase0_offsets:[0,10,30,60,300], phase0_offsets_str:'0, 10, 30, 60, 300',
           phase0_sources:{bybit:true, binance:true},
@@ -20,14 +23,15 @@
           kw_listing_str:'', kw_exclude_str:'',
           alert_on_listing:true, alert_on_notice:true, alert_on_error:false,
           quiet_hours:{enabled:false, start:'23:00', end:'07:00'},
+          subscriber_tiers:{instant:0, delayed:30, free:120}, tiersRows:[],
           telegram_chat_id:'', telegram_token:'', telegram_token_set:false, telegram_configured:false
         },
         tgTestResult: null,
         snapMarket: '', snapMarkets: [], snapshots: [],
         toast: null,
         prefs: { theme:'dark', accent:'amber', density:'comfortable', fontScale:'base',
-                 defaultTab:'live', visibleTabs:['live','announce','markets','phase0'],
-                 visibleCards:['status','about'], timeFormat:'local', tablePageSize:200,
+                 defaultTab:'live', visibleTabs:['live','announce','markets','phase0','subscribers'],
+                 visibleCards:['status','about','exchanges'], timeFormat:'local', tablePageSize:200,
                  numberFormat:{decimals:4, grouping:true}, favorites:[],
                  toastDuration:6000, toastSound:false, toastEvents:['listing','notice'] },
         loadPrefs(){ try{ this.prefs = { ...this.prefs, ...JSON.parse(localStorage.getItem('upbitwatch.prefs')||'{}') }; }catch(e){} },
@@ -48,9 +52,14 @@
         async saveServerSettings(){
           this.tgTestResult = null;
           const s = this.settings;
+          const tiers = {};
+          for (const row of s.tiersRows) { if (row.name && row.name.trim()) tiers[row.name.trim()] = parseFloat(row.delay) || 0; }
           const body = {
             poll_interval: parseFloat(s.poll_interval),
             poll_interval_notice: parseFloat(s.poll_interval_notice),
+            poll_interval_binance: parseFloat(s.poll_interval_binance),
+            poll_interval_bithumb: parseFloat(s.poll_interval_bithumb),
+            poll_interval_coinbase: parseFloat(s.poll_interval_coinbase),
             autostart: !!s.autostart,
             phase0_offsets: (''+s.phase0_offsets_str).split(',').map(x=>parseInt(x.trim(),10)).filter(n=>!isNaN(n)&&n>=0),
             phase0_sources: s.phase0_sources,
@@ -58,6 +67,7 @@
                                exclude: s.kw_exclude_str.split(',').map(x=>x.trim()).filter(Boolean) },
             alert_on_listing: !!s.alert_on_listing, alert_on_notice: !!s.alert_on_notice, alert_on_error: !!s.alert_on_error,
             quiet_hours: s.quiet_hours,
+            subscriber_tiers: tiers,
           };
           if(s.telegram_token) body.telegram_token = s.telegram_token;
           if(s.telegram_chat_id != null && String(s.telegram_chat_id).trim() !== '') body.telegram_chat_id = s.telegram_chat_id;
@@ -68,6 +78,8 @@
             kw_exclude_str: (res.notice_keywords?.exclude||[]).join(', ') };
           if(!this.settings.phase0_sources || typeof this.settings.phase0_sources !== 'object') this.settings.phase0_sources = {bybit:true, binance:true};
           if(!this.settings.quiet_hours || typeof this.settings.quiet_hours !== 'object') this.settings.quiet_hours = {enabled:false, start:'23:00', end:'07:00'};
+          if(!this.settings.subscriber_tiers || typeof this.settings.subscriber_tiers !== 'object') this.settings.subscriber_tiers = {instant:0, delayed:30, free:120};
+          this.settings.tiersRows = Object.entries(this.settings.subscriber_tiers).map(([name, delay]) => ({ name, delay }));
           this.savedFlash = true; setTimeout(()=>this.savedFlash=false, 1600);
         },
 
@@ -91,22 +103,72 @@
           ws.onmessage = (e) => { try { this.onEvent(JSON.parse(e.data)); } catch (err) {} };
         },
         onEvent(ev) {
-          if (ev.type === 'status') this.status = ev.data;
+          // Every exchange's DetectorEngine publishes "status" on the same bus (tagged
+          // with ev.data.exchange) — only Upbit drives the main status bar, the other
+          // three route into exchangeStatuses so they don't clobber each other.
+          if (ev.type === 'status') {
+            if (ev.data.exchange && ev.data.exchange !== 'upbit') this.exchangeStatuses[ev.data.exchange] = ev.data;
+            else this.status = ev.data;
+          }
           else if (ev.type === 'log') { this.logs.push(ev.data); if (this.logs.length > 300) this.logs.splice(0, this.logs.length - 300); this.scrollLogs(); }
-          else if (ev.type === 'listing') { this.listings.unshift(ev.data); this.showToast(ev.data, 'listing'); this.icons(); }
+          else if (ev.type === 'listing') {
+            if (this.exchangeFilter === 'all' || this.exchangeFilter === ev.data.exchange) this.listings.unshift(ev.data);
+            this.showToast(ev.data, 'listing'); this.icons();
+          }
           else if (ev.type === 'notice') { this.notices.unshift(ev.data); if (ev.data.is_listing) this.showToast(ev.data, 'notice'); this.icons(); }
           else if (ev.type === 'snapshot') {
-            if (this.tab === 'phase0' && !this.snapMarkets.includes(ev.data.market)) this.loadSnapshotMarkets();
-            if (ev.data.market === this.snapMarket) this.loadSnapshots();
+            const key = ev.data.exchange + '|' + ev.data.market;
+            if (this.tab === 'phase0' && !this.snapMarkets.some(m => m.exchange === ev.data.exchange && m.market === ev.data.market)) this.loadSnapshotMarkets();
+            if (key === this.snapMarket) this.loadSnapshots();
           }
         },
 
-        async refreshAll() { await Promise.all([this.loadStatus(), this.loadListings(), this.loadNotices(), this.loadLogs(), this.loadMarkets(), this.loadSettings()]); },
+        async refreshAll() { await Promise.all([this.loadStatus(), this.loadExchanges(), this.loadListings(), this.loadNotices(), this.loadLogs(), this.loadMarkets(), this.loadSettings(), this.loadSubscribers()]); },
         async loadStatus() { this.status = await (await fetch('/api/status')).json(); },
-        async loadListings() { this.listings = await (await fetch('/api/listings')).json(); },
+        async loadExchanges() {
+          const rows = await (await fetch('/api/exchanges')).json();
+          for (const r of rows) if (r.exchange !== 'upbit') this.exchangeStatuses[r.exchange] = r;
+        },
+        async loadListings() {
+          const q = this.exchangeFilter !== 'all' ? ('?exchange=' + encodeURIComponent(this.exchangeFilter)) : '';
+          this.listings = await (await fetch('/api/listings' + q)).json();
+        },
         async loadLogs() { this.logs = await (await fetch('/api/logs')).json(); this.scrollLogs(); },
-        async loadMarkets() { this.markets = await (await fetch('/api/markets')).json(); },
+        async loadMarkets() {
+          const q = this.exchangeFilter !== 'all' ? ('?exchange=' + encodeURIComponent(this.exchangeFilter)) : '';
+          this.markets = await (await fetch('/api/markets' + q)).json();
+        },
+        async setExchangeFilter(id) { this.exchangeFilter = id; await Promise.all([this.loadListings(), this.loadMarkets()]); },
         async loadNotices() { this.notices = await (await fetch('/api/notices')).json(); },
+        async loadSubscribers() { this.subscribers = await (await fetch('/api/subscribers')).json(); },
+        async addSubscriber() {
+          this.subError = null;
+          const r = await fetch('/api/subscribers', { method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(this.newSub) });
+          const j = await r.json();
+          if (!r.ok) { this.subError = j.detail || 'Failed to add subscriber'; return; }
+          this.newSub = { chat_id:'', name:'', tier:'free' };
+          await this.loadSubscribers();
+        },
+        async updateSubscriber(sub, fields) {
+          await fetch('/api/subscribers/' + sub.id, { method:'PUT', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(fields) });
+          await this.loadSubscribers();
+        },
+        async deleteSubscriber(sub) {
+          if (!confirm('Remove subscriber ' + (sub.name || sub.chat_id) + '?')) return;
+          await fetch('/api/subscribers/' + sub.id, { method:'DELETE' });
+          await this.loadSubscribers();
+        },
+        async exchangeCtrl(id, action) {
+          this.busy = true;
+          try {
+            const r = await fetch('/api/exchanges/' + id + '/' + action, { method:'POST' });
+            const j = await r.json();
+            if (j.status) this.exchangeStatuses[id] = j.status;
+          } finally { this.busy = false; this.icons(); }
+        },
+        async exchangeSimulate(id) { await fetch('/api/exchanges/' + id + '/simulate', { method:'POST' }); setTimeout(() => { this.loadSnapshotMarkets(); }, 1500); },
         async loadSettings() {
           const s = await (await fetch('/api/settings')).json();
           this.settings = { ...this.settings, ...s, telegram_token: '' };
@@ -117,11 +179,17 @@
           if(!this.settings.quiet_hours || typeof this.settings.quiet_hours !== 'object') {
             this.settings.quiet_hours = {enabled:false, start:'23:00', end:'07:00'};
           }
+          if(!this.settings.subscriber_tiers || typeof this.settings.subscriber_tiers !== 'object') {
+            this.settings.subscriber_tiers = {instant:0, delayed:30, free:120};
+          }
           // Populate string mirrors for comma-separated fields
           this.settings.phase0_offsets_str = (s.phase0_offsets||[]).join(', ');
           this.settings.kw_listing_str = (s.notice_keywords?.listing||[]).join(', ');
           this.settings.kw_exclude_str = (s.notice_keywords?.exclude||[]).join(', ');
+          this.settings.tiersRows = Object.entries(this.settings.subscriber_tiers).map(([name, delay]) => ({ name, delay }));
         },
+        addTierRow() { this.settings.tiersRows.push({ name:'', delay:0 }); },
+        removeTierRow(i) { this.settings.tiersRows.splice(i, 1); },
 
         get filteredMarkets(){ const f=this.marketFilter.trim().toUpperCase();
           let list = f ? this.markets.filter(m=>m.market.includes(f)) : this.markets.slice();
@@ -179,17 +247,23 @@
         async simulate() { await fetch('/api/simulate', { method: 'POST' }); setTimeout(() => { this.loadSnapshotMarkets(); this.loadSnapshots(); }, 1500); },
 
         async loadSnapshotMarkets() {
+          // Each entry is {exchange, market}; the <select> is keyed by "exchange|market"
+          // since the same market string can legitimately exist on more than one exchange.
           this.snapMarkets = await (await fetch('/api/snapshots/markets')).json();
-          if (!this.snapMarkets.length) { this.snapMarket = 'SIM-BTC'; return; }
+          if (!this.snapMarkets.length) { this.snapMarket = 'upbit|SIM-BTC'; return; }
+          const keys = this.snapMarkets.map(m => m.exchange + '|' + m.market);
           // Keep current selection if still present; otherwise default to the most recent
           // *real* listing (skip simulated SIM-* pairs), falling back to whatever exists.
-          if (!this.snapMarkets.includes(this.snapMarket)) {
-            this.snapMarket = this.snapMarkets.find(m => !m.startsWith('SIM-')) || this.snapMarkets[0];
+          if (!keys.includes(this.snapMarket)) {
+            const real = this.snapMarkets.find(m => !m.market.startsWith('SIM-'));
+            const pick = real || this.snapMarkets[0];
+            this.snapMarket = pick.exchange + '|' + pick.market;
           }
         },
 
         async loadSnapshots() {
-          this.snapshots = await (await fetch('/api/listings/' + encodeURIComponent(this.snapMarket) + '/snapshots')).json();
+          const [exchange, market] = this.snapMarket.split('|');
+          this.snapshots = await (await fetch('/api/listings/' + encodeURIComponent(market) + '/snapshots?exchange=' + encodeURIComponent(exchange))).json();
           this.renderChart();
         },
         renderChart() {

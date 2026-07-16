@@ -1,8 +1,9 @@
 # Upbit Watch — localhost control panel
 
-A beautiful dark control panel that runs and monitors the Upbit new-listing detector
-(built from `docs/LOCALHOST_BUILD_PLAN.md`). One FastAPI app supervises the detector and streams
-live status / listings / logs / price snapshots over WebSocket.
+A beautiful dark control panel that runs and monitors new-listing detectors across **Upbit,
+Binance, Bithumb, and Coinbase** (built from `docs/LOCALHOST_BUILD_PLAN.md`). One FastAPI app
+supervises all four detectors and streams live status / listings / logs / price snapshots over
+WebSocket, fanning Telegram alerts out to any number of subscribers on manually-assigned delay tiers.
 
 ## Run (Windows)
 
@@ -30,22 +31,31 @@ the first run seeds existing markets silently; afterward it alerts only on genui
 Dedup (SQLite `state.db`) survives restarts.
 
 ## Features
-- **Control:** Start / Stop / Restart the detector from the top bar.
-- **Status:** uptime, last poll, latency, markets tracked, polls, errors (live via WebSocket).
-- **Listings feed + logs:** new markets appear instantly; streaming log console.
-- **Markets browser:** searchable table of all tracked markets.
-- **Settings:** poll interval + Telegram token/chat ID, with a "Send test message" button.
+- **Control:** Start / Stop / Restart all four exchange detectors from the top bar, or each one
+  independently from the Exchanges panel.
+- **Status:** uptime, last poll, latency, markets tracked, polls, errors (live via WebSocket) —
+  per exchange.
+- **Listings feed + logs:** new markets appear instantly, tagged by exchange, filterable; streaming
+  log console.
+- **Markets browser:** searchable, exchange-filterable table of all tracked markets.
+- **Subscribers:** add/remove any number of Telegram recipients and assign each a delay tier
+  (e.g. instant / delayed / free) — no billing, tiers are just a name + seconds you configure.
+- **Settings:** per-exchange poll interval + Telegram token/chat ID + tier delays, with a
+  "Send test message" button.
 - **Phase 0:** on each listing, snapshots Bybit (primary) + Binance (best-effort) prices at
   +0/10/30/60s/5m and charts them. "Simulate listing" exercises the pipeline (SIM-BTC → BTCUSDT).
-- **Loop B (announcements):** polls Upbit's trade-announcement API, classifies new-listing notices
-  (both "신규 거래지원 안내" and "마켓 디지털 자산 추가" phrasings; excludes delisting/caution),
-  extracts the ticker, and pings Telegram — often *earlier* than Loop A. Best-effort: Cloudflare may
-  429 a home IP (handled gracefully — see the Loop B error count); tune the interval in Settings.
+- **Loop B (Upbit announcements):** polls Upbit's trade-announcement API, classifies new-listing
+  notices (both "신규 거래지원 안내" and "마켓 디지털 자산 추가" phrasings; excludes
+  delisting/caution), extracts the ticker, and alerts — often *earlier* than the market-list
+  engines. Best-effort: Cloudflare may 429 a home IP (handled gracefully — see the Loop B error
+  count); tune the interval in Settings.
 
 ## Files
-`app.py` (FastAPI + WebSocket), `detector.py` (Loop A engine), `notice.py` (Loop B announcement
-poller), `phase0.py` (price logger), `notify.py` (Telegram), `static/index.html` (dashboard),
-`config.json`, `.env` (secrets), `tests/` (pytest suite).
+`app.py` (FastAPI + WebSocket), `exchanges.py` (exchange registry + parsers), `detector.py`
+(generalized new-listing engine), `notice.py` (Upbit Loop B announcement poller), `phase0.py`
+(price logger), `notify.py` (Telegram), `broadcast.py` (per-subscriber tiered fan-out),
+`subscribers.py` (subscriber CRUD), `storage.py` (schema init/migration), `static/index.html` +
+`static/app.js` (dashboard), `config.json`, `.env` (secrets), `tests/` (pytest suite).
 
 ## Documentation
 Full guides live in [`docs/`](docs/):

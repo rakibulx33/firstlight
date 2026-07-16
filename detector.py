@@ -1,10 +1,17 @@
-"""DetectorEngine — async Upbit new-listing detector.
+"""DetectorEngine — async new-listing detector, generalized across exchanges.
 
-Core logic preserved from LOCALHOST_BUILD_PLAN.md:
-  * poll https://api.upbit.com/v1/market/all at a configurable interval
+Core logic preserved from the original Upbit-only build:
+  * poll a market-list endpoint at a configurable interval
   * seed existing markets SILENTLY on the first ever run
   * afterward alert + log ONLY genuinely new markets
   * SQLite dedup that survives restarts
+
+One instance per exchange (see exchanges.EXCHANGES / app.py) shares this same
+class -- only the URL, response parser, headers, and poll-interval config key
+differ per exchange, so the loop/dedup/EventBus/Telegram/Phase0 wiring isn't
+duplicated per exchange. `seen`/`listings` are keyed on `(exchange, market)` so
+multiple exchanges can be dedup'd in the same tables without collisions (see
+storage.py).
 
 Refactored into a supervised engine the FastAPI control panel can start/stop/restart,
 emitting live events (status / listing / log) onto an EventBus for WebSocket fan-out.
@@ -17,9 +24,10 @@ from datetime import datetime, timezone
 
 import aiohttp
 
+import subscribers
 from alerts import alert_allowed
-
-UPBIT_MARKET_URL = "https://api.upbit.com/v1/market/all"
+from broadcast import fanout
+from exchanges import UPBIT_MARKET_URL, parse_upbit
 
 
 def utcnow_iso() -> str:
@@ -49,14 +57,36 @@ class EventBus:
 
 
 class DetectorEngine:
-    def __init__(self, db_path, config, notifier=None, phase0=None, bus=None):
+    def __init__(
+        self,
+        db_path,
+        config,
+        notifier=None,
+        phase0=None,
+        bus=None,
+        exchange: str = "upbit",
+        label: str | None = None,
+        market_url: str | None = None,
+        parse_fn=None,
+        headers: dict | None = None,
+        poll_interval_key: str = "poll_interval",
+        default_poll_interval: float = 1.0,
+    ):
         self.db_path = db_path
-        self.config = config            # dict; reads "poll_interval"
+        self.config = config            # dict; reads config[poll_interval_key]
         self.notifier = notifier        # notify.Telegram | None
         self.phase0 = phase0            # phase0.Phase0 | None
         self.bus = bus or EventBus()
+        self.exchange = exchange
+        self.label = label or exchange.title()
+        self.market_url = market_url or UPBIT_MARKET_URL
+        self.parse_fn = parse_fn or parse_upbit
+        self.headers = headers
+        self.poll_interval_key = poll_interval_key
+        self.default_poll_interval = default_poll_interval
         self.logs: deque = deque(maxlen=500)
         self._task: asyncio.Task | None = None
+        self._notify_tasks: set[asyncio.Task] = set()
         self._running = False
         self.started_at: float | None = None
         self.last_poll_ts: str | None = None
@@ -65,7 +95,7 @@ class DetectorEngine:
         self.poll_count = 0
         self.error_count = 0
         self.last_error: str | None = None
-        self.notice_poller = None       # Loop B (set by app.py); started/stopped with Loop A
+        self.notice_poller = None       # Loop B (Upbit only, set by app.py)
         self._error_alerted = False
         self._init_db()
 
@@ -79,15 +109,20 @@ class DetectorEngine:
     def _init_db(self) -> None:
         with self._conn() as db:
             db.execute("PRAGMA journal_mode=WAL")  # concurrent readers + 1 writer, no lock storms
-            db.execute("CREATE TABLE IF NOT EXISTS seen(market TEXT PRIMARY KEY, ts TEXT)")
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS seen("
+                "exchange TEXT NOT NULL, market TEXT NOT NULL, ts TEXT,"
+                " PRIMARY KEY(exchange, market))"
+            )
             db.execute(
                 "CREATE TABLE IF NOT EXISTS listings("
-                "market TEXT PRIMARY KEY, english TEXT, korean TEXT, detected_at TEXT)"
+                "exchange TEXT NOT NULL, market TEXT NOT NULL, base TEXT, english TEXT, korean TEXT,"
+                " detected_at TEXT, PRIMARY KEY(exchange, market))"
             )
             db.execute(
                 "CREATE TABLE IF NOT EXISTS snapshots("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT, market TEXT, source TEXT,"
-                " t_offset INTEGER, price REAL, ts TEXT)"
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, exchange TEXT NOT NULL DEFAULT 'upbit',"
+                " market TEXT, source TEXT, t_offset INTEGER, price REAL, ts TEXT)"
             )
             db.commit()
 
@@ -101,6 +136,8 @@ class DetectorEngine:
     def status(self) -> dict:
         uptime = round(time.time() - self.started_at, 1) if self.started_at else None
         return {
+            "exchange": self.exchange,
+            "label": self.label,
             "running": self._running,
             "started_at": self.started_at,
             "uptime_s": uptime,
@@ -110,7 +147,7 @@ class DetectorEngine:
             "poll_count": self.poll_count,
             "error_count": self.error_count,
             "last_error": self.last_error,
-            "poll_interval": float(self.config.get("poll_interval", 1.0)),
+            "poll_interval": float(self.config.get(self.poll_interval_key, self.default_poll_interval)),
             "loop_b": self.notice_poller.status() if self.notice_poller else None,
         }
 
@@ -128,7 +165,7 @@ class DetectorEngine:
         self._task = asyncio.create_task(self._run())
         if self.notice_poller:
             await self.notice_poller.start()
-        self.log("info", "Detector started")
+        self.log("info", f"{self.label} detector started")
         self.publish_status()
 
     async def stop(self) -> None:
@@ -145,7 +182,7 @@ class DetectorEngine:
         if self.notice_poller:
             await self.notice_poller.stop()
         self.started_at = None
-        self.log("info", "Detector stopped")
+        self.log("info", f"{self.label} detector stopped")
         self.publish_status()
 
     async def restart(self) -> None:
@@ -155,44 +192,46 @@ class DetectorEngine:
     # ---- main loop -----------------------------------------------------
     async def _run(self) -> None:
         with self._conn() as db:
-            seen = {r[0] for r in db.execute("SELECT market FROM seen")}
+            seen = {r[0] for r in db.execute("SELECT market FROM seen WHERE exchange=?", (self.exchange,))}
         first_run = not seen
         try:
-            async with aiohttp.ClientSession() as session:
+            session_kwargs = {"headers": self.headers} if self.headers else {}
+            async with aiohttp.ClientSession(**session_kwargs) as session:
                 while self._running:
-                    interval = float(self.config.get("poll_interval", 1.0))
+                    interval = float(self.config.get(self.poll_interval_key, self.default_poll_interval))
                     t0 = time.perf_counter()
                     try:
                         async with session.get(
-                            UPBIT_MARKET_URL, timeout=aiohttp.ClientTimeout(total=5)
+                            self.market_url, timeout=aiohttp.ClientTimeout(total=8)
                         ) as r:
                             data = await r.json()
                         self.last_latency_ms = round((time.perf_counter() - t0) * 1000, 1)
                         self.last_poll_ts = utcnow_iso()
                         self.poll_count += 1
                         self._error_alerted = False
-                        current = {m["market"] for m in data}
+                        infos = self.parse_fn(data)
+                        by_market = {i["market"]: i for i in infos}
+                        current = set(by_market)
                         self.markets_count = len(current)
                         now = utcnow_iso()
                         if first_run:
                             with self._conn() as db:
                                 db.executemany(
-                                    "INSERT OR IGNORE INTO seen VALUES(?,?)",
-                                    [(m, now) for m in current],
+                                    "INSERT OR IGNORE INTO seen(exchange, market, ts) VALUES(?,?,?)",
+                                    [(self.exchange, m, now) for m in current],
                                 )
                                 db.commit()
                             first_run = False
                             seen = current
                             self.log(
                                 "info",
-                                f"Seeded {len(current)} existing markets silently (first run)",
+                                f"{self.label} seeded {len(current)} existing markets silently (first run)",
                             )
                         else:
                             new = current - seen
                             if new:
                                 for mk in sorted(new):
-                                    info = next((x for x in data if x["market"] == mk), {})
-                                    await self._handle_new(mk, info, now)
+                                    await self._handle_new(mk, by_market.get(mk, {}), now)
                                 seen = current
                         self.publish_status()
                     except asyncio.CancelledError:
@@ -200,34 +239,47 @@ class DetectorEngine:
                     except Exception as e:  # noqa: BLE001 - poll must never die
                         self.error_count += 1
                         self.last_error = str(e)
-                        self.log("error", f"poll error: {e}")
+                        self.log("error", f"{self.label} poll error: {e}")
                         if not self._error_alerted and self.notifier and alert_allowed(self.config, "error"):
                             self._error_alerted = True
-                            try:
-                                await self.notifier.send(f"⚠️ Upbit Watch — Loop A error: {e}")
-                            except Exception:  # noqa: BLE001
-                                pass
+                            self._notify(f"⚠️ {self.label} — poll error: {e}")
                         self.publish_status()
                     await asyncio.sleep(interval)
         except asyncio.CancelledError:
             pass
 
+    def _notify(self, text: str) -> None:
+        """Fire-and-forget broadcast to every enabled subscriber, tiered by delay."""
+        subs = subscribers.list_subscribers(self.db_path)
+        tiers = self.config.get("subscriber_tiers") or {}
+        tasks = fanout(self.notifier, subs, tiers, text, self.log)
+        self._notify_tasks.update(tasks)
+        for t in tasks:
+            t.add_done_callback(self._notify_tasks.discard)
+
     async def _handle_new(self, market: str, info: dict, now: str) -> None:
-        english = info.get("english_name", "")
-        korean = info.get("korean_name", "")
+        base = info.get("base") or market
+        english = info.get("display_en", "")
+        korean = info.get("display_kr", "")
         with self._conn() as db:
-            db.execute("INSERT OR IGNORE INTO seen VALUES(?,?)", (market, now))
             db.execute(
-                "INSERT OR IGNORE INTO listings VALUES(?,?,?,?)",
-                (market, english, korean, now),
+                "INSERT OR IGNORE INTO seen(exchange, market, ts) VALUES(?,?,?)",
+                (self.exchange, market, now),
+            )
+            db.execute(
+                "INSERT OR IGNORE INTO listings(exchange, market, base, english, korean, detected_at)"
+                " VALUES(?,?,?,?,?,?)",
+                (self.exchange, market, base, english, korean, now),
             )
             db.commit()
-        self.log("alert", f"NEW MARKET {market} {english} ({korean})")
+        self.log("alert", f"NEW LISTING [{self.label}] {market} {english} ({korean})")
         self.bus.publish(
             {
                 "type": "listing",
                 "data": {
+                    "exchange": self.exchange,
                     "market": market,
+                    "base": base,
                     "english": english,
                     "korean": korean,
                     "detected_at": now,
@@ -235,13 +287,9 @@ class DetectorEngine:
             }
         )
         if self.notifier and alert_allowed(self.config, "listing"):
-            res = await self.notifier.send(
-                f"\U0001F6A8 UPBIT NEW MARKET: {market}\n{english} ({korean})\n{now}"
-            )
-            if not res.get("ok"):
-                self.log("error", f"Telegram alert failed: {res.get('error', res)}")
+            self._notify(f"\U0001F6A8 {self.label} NEW LISTING: {market}\n{english} ({korean})\n{now}")
         if self.phase0:
-            self.phase0.schedule(market, english)
+            self.phase0.schedule(market, base, display=english, exchange=self.exchange)
 
     async def simulate_listing(self, market: str = "SIM-BTC", english: str = "Simulated Bitcoin",
                                korean: str = "시뮬레이션") -> None:
@@ -249,5 +297,6 @@ class DetectorEngine:
 
         Default maps to base BTC -> BTCUSDT so Phase 0 captures a real Bybit price.
         """
-        self.log("info", f"Simulating new listing: {market}")
-        await self._handle_new(market, {"english_name": english, "korean_name": korean}, utcnow_iso())
+        self.log("info", f"Simulating new listing on {self.label}: {market}")
+        base = market.split("-")[-1] if "-" in market else market
+        await self._handle_new(market, {"base": base, "display_en": english, "display_kr": korean}, utcnow_iso())
