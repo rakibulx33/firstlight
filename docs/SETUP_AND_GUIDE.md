@@ -8,19 +8,27 @@ Seoul VPS later. Companion to `LOCALHOST_BUILD_PLAN.md`.
 
 ## 1. What it does
 
-Two independent detectors run together and feed one dashboard:
+Five independent detectors run together and feed one dashboard:
 
 | | Source | Speed | Reliability |
 |---|---|---|---|
-| **Loop A** | `api.upbit.com/v1/market/all` (the tradable-market list) | polls every **1 s** | **Primary** — rock solid |
-| **Loop B** | `api-manager.upbit.com/.../announcements` (the notice feed) | polls every **3 s** | **Early-warning** — best-effort (Cloudflare may 429 a home IP) |
+| **Upbit** | `api.upbit.com/v1/market/all` (the tradable-market list) | polls every **1 s** | **Primary** — rock solid |
+| **Loop B** (Upbit only) | `api-manager.upbit.com/.../announcements` (the notice feed) | polls every **3 s** | **Early-warning** — best-effort (Cloudflare may 429 a home IP) |
+| **Binance** | `api.binance.com/api/v3/exchangeInfo` | polls every **5 s** (default) | best-effort |
+| **Bithumb** | `api.bithumb.com/v1/market/all` | polls every **5 s** (default) | best-effort |
+| **Coinbase** | `api.exchange.coinbase.com/products` | polls every **5 s** (default) | best-effort |
 
 Plus **Phase 0**: on each detected listing it snapshots the coin's price on Bybit (primary) and
 Binance (best-effort) at **+0 / 10 / 30 / 60 s / 5 m** and charts it — the dataset that tells you
 how big the entry window/pump is for *your* latency.
 
-Both detectors **seed silently on first run** (record what already exists, send nothing), then alert
-**only** on genuinely new items. De-duplication lives in SQLite (`state.db`) and **survives restarts**.
+All five detectors **seed silently on first run** (record what already exists, send nothing), then
+alert **only** on genuinely new items. De-duplication lives in SQLite (`state.db`), keyed per
+exchange, and **survives restarts**.
+
+Alerts fan out to a list of **Telegram subscribers** (Settings → Subscribers tab), each on a
+manually-assigned **tier** (e.g. instant / delayed / free) that controls how many seconds late
+that subscriber's copy of the alert is sent — no billing, you assign tiers yourself.
 
 ---
 
@@ -29,7 +37,9 @@ Both detectors **seed silently on first run** (record what already exists, send 
 - **Windows 10/11** with **Python 3.11+** — check in a terminal: `py --version`
   (get it from [python.org](https://www.python.org/downloads/) and tick "Add python.exe to PATH").
 - A **Telegram bot token + chat ID** (see §4)
-- Outbound internet only (no port-forwarding). Upbit + Bybit must be reachable; Binance is optional.
+- Outbound internet only (no port-forwarding). Upbit + Bybit must be reachable; Binance, Bithumb,
+  Coinbase, and Binance-as-a-Phase0-price-source are all best-effort — if one is unreachable from
+  your network, that engine just logs errors and the rest keep working.
 
 ---
 
@@ -70,6 +80,27 @@ py -3 -m venv .venv
 
 ---
 
+## 4a. Fast feed setup (optional — coinlisting.pro)
+
+An optional third-party WebSocket signal source that layers on top of the built-in exchange
+pollers for potentially faster detection. Not required — the bot works fully without it.
+
+1. Paste your API key into **Settings → Fast Feed** and click **Save** (it's written to `.env` as
+   `COINLISTING_API_KEY`, same as the Telegram token — never returned by the API, never written to
+   `config.json`, never committed to git).
+2. Hit **Start** on the Fast Feed sidebar card (or the top-bar Start, which now starts it too).
+3. Watch the **Logs** tab for `Fast feed connected (tokyo)` / `(seoul)` and, once a listing comes
+   through, `Fast feed signal: [...]`. A listing detected here fires the exact same alert path as
+   one detected by polling — whichever source sees it first wins, no duplicate alerts.
+
+> ⚠️ **The message schema wasn't documented anywhere available when this was built** — only the
+> provider's marketing/pricing page, no example payloads. Parsing (`coinlisting.py`'s
+> `parse_message`) is a best-effort guess at common field names. If the feed connects but the Logs
+> tab never shows a "Fast feed signal" line despite listings happening, the guessed field names are
+> probably wrong for the real message shape — that function is the one place to fix.
+
+---
+
 ## 5. Running
 
 Easiest — double-click one of these:
@@ -100,36 +131,42 @@ watching. Set it to `false` if you'd rather press **Start** yourself.
 
 ## 6. Using the dashboard
 
-**Top bar** — `Start` / `Stop` / `Restart` control *both* loops together. The green dot pulses when
-running; the `live` pill shows the WebSocket is connected; the gear opens **Settings**.
+**Top bar** — `Start` / `Stop` / `Restart` control *all four exchange engines* together. The green
+dot pulses when Upbit is running; the `live` pill shows the WebSocket is connected; the gear opens
+**Settings**.
 
-**Status card (left)** — uptime, last poll time, poll latency, markets tracked, total polls, errors.
-Below it, a **Loop B** panel shows announcements seen, listings detected, and Loop B errors.
+**Status card (left)** — Upbit's uptime, last poll time, poll latency, markets tracked, total
+polls, errors. Below it, a **Loop B** panel shows announcements seen, listings detected, and Loop B
+errors. Below that, an **Exchanges** panel shows Binance/Bithumb/Coinbase each with their own
+start/stop/simulate controls.
 
 **Tabs**
 
-- **Live** — the new-market feed (Loop A) on the left, a streaming log console on the right. A new
-  listing flashes in and raises a toast.
-- **Announce** — the announcement feed (Loop B). Listing notices are highlighted amber with the
-  ticker badge + a `listing` tag; delisting/caution notices are shown muted. Click any card to open
-  the official Upbit notice.
-- **Markets** — searchable table of every tracked market (type e.g. `KRW-` to filter).
-- **Phase 0** — the price-snapshot chart. Pick a market, **Refresh**, or hit **Simulate listing** to
-  fire a fake `SIM-BTC → BTCUSDT` through the whole pipeline and watch the chart fill.
+- **Live** — the new-listing feed (all exchanges, filterable by exchange chip) on the left, a
+  streaming log console on the right. A new listing flashes in and raises a toast.
+- **Announce** — the Upbit announcement feed (Loop B). Listing notices are highlighted amber with
+  the ticker badge + a `listing` tag; delisting/caution notices are shown muted. Click any card to
+  open the official Upbit notice.
+- **Markets** — searchable, exchange-filterable table of every tracked market (type e.g. `KRW-` to
+  filter).
+- **Phase 0** — the price-snapshot chart. Pick an exchange+market, **Refresh**, or hit **Simulate
+  listing** to fire a fake `SIM-BTC → BTCUSDT` through the whole pipeline and watch the chart fill.
+- **Subscribers** — add/remove Telegram recipients and assign each a delay tier.
 
-**Settings (drawer)** — Loop A poll interval, Loop B poll interval, Telegram token/chat id, and the
-**Send test message** button.
+**Settings (drawer)** — per-exchange poll intervals, Telegram token/chat id, subscriber tier
+delays (Tiers section), and the **Send test message** button.
 
 ---
 
 ## 7. Alerts you'll receive
 
-- **Loop A (market live):**
-  `🚨 UPBIT NEW MARKET: KRW-XXX` + name + UTC timestamp
-- **Loop B (announcement):**
+- **New listing (any exchange):**
+  `🚨 <Exchange> NEW LISTING: KRW-XXX` + name + UTC timestamp
+- **Loop B (Upbit announcement):**
   `📢 UPBIT LISTING ANNOUNCEMENT: XXX` + the Korean title + a link to the notice
 
-Loop B usually fires first; Loop A confirms the market is actually tradable.
+Loop B usually fires first; the market-list engines confirm the market is actually tradable. Every
+alert is sent once per enabled subscriber, delayed by that subscriber's assigned tier.
 
 ---
 
@@ -138,11 +175,17 @@ Loop B usually fires first; Loop A confirms the market is actually tradable.
 `config.json`
 | Key | Default | Meaning |
 |---|---|---|
-| `poll_interval` | `1.0` | Loop A seconds between polls (1/s is within Upbit's limit) |
+| `poll_interval` | `1.0` | Upbit seconds between polls (1/s is within Upbit's limit) |
 | `poll_interval_notice` | `3.0` | Loop B seconds between polls (keep ≥3 s to avoid Cloudflare 429) |
-| `autostart` | `true` | Arm both loops automatically when the app launches |
+| `poll_interval_binance` | `5.0` | Binance seconds between polls |
+| `poll_interval_bithumb` | `5.0` | Bithumb seconds between polls |
+| `poll_interval_coinbase` | `5.0` | Coinbase seconds between polls |
+| `autostart` | `true` | Arm all exchange engines automatically when the app launches |
+| `subscriber_tiers` | `{"instant":0,"delayed":30,"free":120}` | Tier name → alert delay in seconds; assign a subscriber's tier from the Subscribers tab |
 
-`.env` — `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
+`.env` — `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (legacy single-recipient fallback, auto-migrated
+into the first Subscribers row on first boot after upgrading), `COINLISTING_API_KEY` (optional
+fast feed, see §4a).
 
 ---
 
@@ -150,16 +193,24 @@ Loop B usually fires first; Loop A confirms the market is actually tradable.
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/start` `/api/stop` `/api/restart` | control both loops |
-| GET | `/api/status` | full status (incl. `loop_b`) |
-| GET | `/api/listings` | detected markets (Loop A) |
-| GET | `/api/notices` | announcements (Loop B) |
-| GET | `/api/markets` | all tracked markets |
+| POST | `/api/start` `/api/stop` `/api/restart` | control all four exchange engines + the fast feed |
+| GET | `/api/status` | Upbit engine's full status (incl. `loop_b`) |
+| GET | `/api/exchanges` | status for all four exchange engines |
+| POST | `/api/exchanges/{id}/start` `/stop` `/restart` | control one exchange engine |
+| POST | `/api/exchanges/{id}/simulate` | dev: fire a fake listing on one exchange |
+| GET | `/api/fastfeed` | fast feed (coinlisting.pro) status |
+| POST | `/api/fastfeed/start` `/stop` `/restart` | control the fast feed independently |
+| GET | `/api/listings?exchange=` | detected markets, optionally filtered |
+| GET | `/api/notices` | Upbit announcements (Loop B) |
+| GET | `/api/markets?exchange=` | all tracked markets, optionally filtered |
 | GET | `/api/logs` | recent log lines |
-| GET/PUT | `/api/settings` | read/update intervals + Telegram |
+| GET/PUT | `/api/settings` | read/update intervals + Telegram + subscriber tiers |
+| GET/POST | `/api/subscribers` | list / add a Telegram subscriber |
+| PUT/DELETE | `/api/subscribers/{id}` | update a subscriber's tier/name/enabled, or remove them |
 | POST | `/api/telegram/test` | send a test Telegram message |
-| POST | `/api/simulate` | dev: fire a fake listing (SIM-BTC) |
-| GET | `/api/listings/{market}/snapshots` | Phase 0 price points |
+| POST | `/api/simulate` | dev: fire a fake Upbit listing (SIM-BTC) |
+| GET | `/api/snapshots/markets` | distinct `(exchange, market)` pairs with Phase 0 data |
+| GET | `/api/listings/{market}/snapshots?exchange=` | Phase 0 price points |
 | WS | `/ws` | live status / listing / notice / log / snapshot events |
 
 Interactive docs: `http://localhost:8000/docs`.
@@ -173,6 +224,18 @@ Interactive docs: `http://localhost:8000/docs`.
   unaffected and remains your reliable signal.
 - **Phase 0 Binance values are blank** — Binance is intermittently blocked from this network; Bybit
   values still fill in. This is expected and non-fatal.
+- **Binance/Bithumb/Coinbase error count climbing** — those markets-list endpoints may be
+  unreachable or rate-limiting from your network/IP; each engine logs and keeps retrying
+  independently, and doesn't affect Upbit detection. Raise that exchange's poll interval in Settings.
+- **A subscriber isn't getting alerts** — check they're `enabled` in the Subscribers tab and that
+  their assigned tier has the delay you expect (Settings → Tiers).
+- **Fast Feed shows "connected" but never produces a signal** — the message schema was guessed
+  (see §4a); watch the Logs tab, and if real listings never produce a `Fast feed signal: [...]`
+  line, `coinlisting.py`'s `parse_message` needs its field-name guesses corrected against a real
+  message.
+- **Changed the Fast Feed key but it's still using the old one** — hit **Restart** (top bar or the
+  Fast Feed card); the key only takes effect on the next connection attempt, not retroactively on
+  an already-open socket.
 - **Browser can't reach localhost:8000** — make sure the server window is still running and that it
   bound to `127.0.0.1:8000`.
 - **Want a clean slate** — `del state.db state.db-shm state.db-wal` (removes the WAL sidecar files

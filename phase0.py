@@ -4,7 +4,12 @@ On each new listing, snapshot the coin's spot price at +0/10/30/60s/5m.
 Primary source: Bybit (reachable). Best-effort: Binance (currently geo-blocked from
 this machine -> recorded as NULL, no crash). Rows land in the `snapshots` table.
 
-Upbit market like "KRW-XYZ" / "SIM-BTC" -> base = last segment -> "<BASE>USDT".
+`schedule()` takes the base asset ticker directly (e.g. "BTC" -> "BTCUSDT")
+rather than deriving it from the exchange-native market id, since that
+derivation only works for Upbit-shaped ids ("KRW-XYZ"). Binance ids are already
+bare symbols ("BTCUSDT") and Coinbase ids are "BTC-USD" -- callers (DetectorEngine)
+already have the correctly-parsed base asset from exchanges.parse_*, so this
+module doesn't need to guess.
 """
 import asyncio
 import sqlite3
@@ -45,23 +50,26 @@ class Phase0:
     def schedule(
         self,
         market: str,
-        english: str = "",
+        base: str,
+        display: str = "",
+        exchange: str = "upbit",
         base_ts: datetime | None = None,
         offsets: list[int] | None = None,
     ) -> None:
-        """Arm price-snapshot collection for `market`.
+        """Arm price-snapshot collection for `market` (exchange-native id, used as
+        the storage key) using `base` (the base asset ticker, e.g. "BTC") to build
+        the Bybit/Binance lookup symbol.
 
         base_ts: detection time the offsets are measured from (default: now).
         offsets: which offsets to capture (default: all). Used by resume_pending to
         capture only the offsets that are still in the future after a restart.
         """
-        base = market.split("-")[-1]
         symbol = f"{base}USDT"
         offs = self._offsets() if offsets is None else list(offsets)
-        t = asyncio.create_task(self._collect(market, symbol, base_ts, offs))
+        t = asyncio.create_task(self._collect(market, symbol, base_ts, offs, exchange))
         self._tasks.add(t)
         t.add_done_callback(self._tasks.discard)
-        self._log("info", f"Phase0 scheduled for {market} ({symbol}) at +{offs}s")
+        self._log("info", f"Phase0 scheduled for [{exchange}] {market} ({symbol}) at +{offs}s")
 
     def resume_pending(self) -> None:
         """Re-arm Phase 0 after a process restart.
@@ -76,7 +84,7 @@ class Phase0:
         resumed = 0
         with sqlite3.connect(self.db_path) as db:
             db.row_factory = sqlite3.Row
-            listings = db.execute("SELECT market, detected_at FROM listings").fetchall()
+            listings = db.execute("SELECT exchange, market, base, detected_at FROM listings").fetchall()
             for r in listings:
                 try:
                     det = datetime.fromisoformat(r["detected_at"])
@@ -88,14 +96,18 @@ class Phase0:
                 done = {
                     row[0]
                     for row in db.execute(
-                        "SELECT DISTINCT t_offset FROM snapshots WHERE market=?", (r["market"],)
+                        "SELECT DISTINCT t_offset FROM snapshots WHERE exchange=? AND market=?",
+                        (r["exchange"], r["market"]),
                     )
                 }
                 remaining = [
                     o for o in self._offsets() if o not in done and (det + timedelta(seconds=o)) > now
                 ]
                 if remaining:
-                    self.schedule(r["market"], base_ts=det, offsets=remaining)
+                    base = r["base"] or r["market"]
+                    self.schedule(
+                        r["market"], base, exchange=r["exchange"], base_ts=det, offsets=remaining
+                    )
                     resumed += 1
         if resumed:
             self._log("info", f"Phase0 resumed {resumed} pending collection(s) after restart")
@@ -106,6 +118,7 @@ class Phase0:
         symbol: str,
         base_ts: datetime | None,
         offsets: list[int],
+        exchange: str,
     ) -> None:
         base_dt = base_ts or datetime.now(timezone.utc)
         async with aiohttp.ClientSession() as session:
@@ -117,14 +130,15 @@ class Phase0:
                 src = self._sources()
                 bybit = await self._bybit(session, symbol) if src["bybit"] else None
                 binance = await self._binance(session, symbol) if src["binance"] else None
-                self._save(market, "bybit", off, bybit, ts)
-                self._save(market, "binance", off, binance, ts)
-                self._log("info", f"Phase0 {market} +{off}s  bybit={bybit}  binance={binance}")
+                self._save(exchange, market, "bybit", off, bybit, ts)
+                self._save(exchange, market, "binance", off, binance, ts)
+                self._log("info", f"Phase0 [{exchange}] {market} +{off}s  bybit={bybit}  binance={binance}")
                 if self.bus:
                     self.bus.publish(
                         {
                             "type": "snapshot",
                             "data": {
+                                "exchange": exchange,
                                 "market": market,
                                 "t_offset": off,
                                 "bybit": bybit,
@@ -157,11 +171,11 @@ class Phase0:
             pass
         return None
 
-    def _save(self, market, source, off, price, ts):
+    def _save(self, exchange, market, source, off, price, ts):
         with sqlite3.connect(self.db_path) as db:
             db.execute("PRAGMA busy_timeout=3000")
             db.execute(
-                "INSERT INTO snapshots(market,source,t_offset,price,ts) VALUES(?,?,?,?,?)",
-                (market, source, off, price, ts),
+                "INSERT INTO snapshots(exchange,market,source,t_offset,price,ts) VALUES(?,?,?,?,?,?)",
+                (exchange, market, source, off, price, ts),
             )
             db.commit()

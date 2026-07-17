@@ -22,11 +22,15 @@ except ImportError:
     pass
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+import storage
+import subscribers as subs_store
+from coinlisting import CoinListingFeed
 from detector import DetectorEngine, EventBus
+from exchanges import EXCHANGES
 from notice import NoticePoller
 from notify import Telegram
 from phase0 import Phase0
@@ -39,6 +43,9 @@ ENV_PATH = BASE / ".env"
 CONFIG_DEFAULTS = {
     "poll_interval": 1.0,
     "poll_interval_notice": 3.0,
+    "poll_interval_binance": EXCHANGES["binance"]["default_poll_interval"],
+    "poll_interval_bithumb": EXCHANGES["bithumb"]["default_poll_interval"],
+    "poll_interval_coinbase": EXCHANGES["coinbase"]["default_poll_interval"],
     "autostart": True,
     "phase0_offsets": [0, 10, 30, 60, 300],
     "phase0_sources": {"bybit": True, "binance": True},
@@ -50,6 +57,7 @@ CONFIG_DEFAULTS = {
     "alert_on_notice": True,
     "alert_on_error": False,
     "quiet_hours": {"enabled": False, "start": "23:00", "end": "07:00"},
+    "subscriber_tiers": {"instant": 0, "delayed": 30, "free": 120},
 }
 
 
@@ -84,6 +92,24 @@ def validate_config_updates(body: dict) -> dict:
             out["poll_interval_notice"] = max(1.0, float(body["poll_interval_notice"]))
         except (TypeError, ValueError):
             pass
+    for key in ("poll_interval_binance", "poll_interval_bithumb", "poll_interval_coinbase"):
+        if key in body:
+            try:
+                out[key] = max(0.5, float(body[key]))
+            except (TypeError, ValueError):
+                pass
+    if "subscriber_tiers" in body and isinstance(body["subscriber_tiers"], dict):
+        tiers = {}
+        for name, delay in body["subscriber_tiers"].items():
+            name = str(name).strip()
+            if not name:
+                continue
+            try:
+                tiers[name] = max(0.0, float(delay))
+            except (TypeError, ValueError):
+                continue
+        if tiers:
+            out["subscriber_tiers"] = tiers
     if "autostart" in body:
         out["autostart"] = bool(body["autostart"])
     if "phase0_offsets" in body and isinstance(body["phase0_offsets"], list):
@@ -141,27 +167,57 @@ def persist_env(key: str, value: str) -> None:
 
 load_dotenv(ENV_PATH)
 config = load_config()
+storage.init_schema(DB)  # exchange-aware seen/listings/snapshots + subscribers table
 bus = EventBus()
 telegram = Telegram(os.getenv("TELEGRAM_BOT_TOKEN"), os.getenv("TELEGRAM_CHAT_ID"))
+# Preserve pre-multi-subscriber behavior: if nobody's been added as a subscriber yet
+# but .env still has the legacy single TELEGRAM_CHAT_ID, seed it as the first subscriber.
+subs_store.ensure_legacy_migrated(DB, telegram.chat_id)
 phase0 = Phase0(DB, bus=bus, config=config)
-engine = DetectorEngine(DB, config, notifier=telegram, phase0=phase0, bus=bus)
-phase0.logger = engine.log  # route Phase 0 logs through the engine log/bus
-# Loop B — announcement poller, started/stopped alongside Loop A by the engine.
+
+# One DetectorEngine per exchange in the registry (exchanges.py); only the Upbit
+# instance gets a Loop B (announcement) poller — that's an Upbit-specific feed.
+engines: dict[str, DetectorEngine] = {}
+for ex_id, spec in EXCHANGES.items():
+    eng = DetectorEngine(
+        DB, config, notifier=telegram, phase0=phase0, bus=bus,
+        exchange=ex_id, label=spec["label"], market_url=spec["market_url"],
+        parse_fn=spec["parse"], headers=spec.get("headers"),
+        poll_interval_key=spec["poll_interval_key"],
+        default_poll_interval=spec["default_poll_interval"],
+    )
+    engines[ex_id] = eng
+
+engine = engines["upbit"]  # back-compat alias used throughout existing endpoints/tests
+phase0.logger = engine.log  # route Phase 0 logs through the (Upbit) engine log/bus
+# Loop B — announcement poller, Upbit-only, started/stopped alongside Upbit's Loop A.
 notice_poller = NoticePoller(
     DB, config, notifier=telegram, bus=bus, logger=engine.log, on_tick=engine.publish_status
 )
 engine.notice_poller = notice_poller
+
+# Optional fast-path signal source (coinlisting.pro) layered on top of the exchange
+# engines -- only connects if COINLISTING_API_KEY is set (never stored in config.json,
+# same secrets-in-.env pattern as the Telegram token). See coinlisting.py for the
+# schema caveat: field names are a best-effort guess, unverified against a live message.
+coinlisting_feed = CoinListingFeed(
+    engines, config, bus=bus, logger=engine.log, api_key=os.getenv("COINLISTING_API_KEY")
+)
 
 
 @asynccontextmanager
 async def lifespan(app):
     # Auto-arm on launch so a reboot + relaunch comes up watching (no manual Start).
     if config.get("autostart", True):
-        await engine.start()
+        for eng in engines.values():
+            await eng.start()
+        await coinlisting_feed.start()  # no-op if not configured
     # Re-arm any Phase 0 collections interrupted by the restart (capture remaining offsets).
     phase0.resume_pending()
     yield
-    await engine.stop()
+    for eng in engines.values():
+        await eng.stop()
+    await coinlisting_feed.stop()
 
 
 app = FastAPI(title="Upbit Watch", lifespan=lifespan)
@@ -175,20 +231,49 @@ async def index():
 
 @app.post("/api/start")
 async def api_start():
-    await engine.start()
+    for eng in engines.values():
+        await eng.start()
+    await coinlisting_feed.start()
     return {"ok": True, "status": engine.status()}
 
 
 @app.post("/api/stop")
 async def api_stop():
-    await engine.stop()
+    for eng in engines.values():
+        await eng.stop()
+    await coinlisting_feed.stop()
     return {"ok": True, "status": engine.status()}
 
 
 @app.post("/api/restart")
 async def api_restart():
-    await engine.restart()
+    for eng in engines.values():
+        await eng.restart()
+    await coinlisting_feed.restart()
     return {"ok": True, "status": engine.status()}
+
+
+@app.get("/api/fastfeed")
+async def api_fastfeed_status():
+    return coinlisting_feed.status()
+
+
+@app.post("/api/fastfeed/start")
+async def api_fastfeed_start():
+    await coinlisting_feed.start()
+    return {"ok": True, "status": coinlisting_feed.status()}
+
+
+@app.post("/api/fastfeed/stop")
+async def api_fastfeed_stop():
+    await coinlisting_feed.stop()
+    return {"ok": True, "status": coinlisting_feed.status()}
+
+
+@app.post("/api/fastfeed/restart")
+async def api_fastfeed_restart():
+    await coinlisting_feed.restart()
+    return {"ok": True, "status": coinlisting_feed.status()}
 
 
 @app.get("/api/status")
@@ -196,24 +281,69 @@ async def api_status():
     return engine.status()
 
 
+@app.get("/api/exchanges")
+async def api_exchanges():
+    return [eng.status() for eng in engines.values()]
+
+
+def _exchange_engine(exchange_id: str) -> DetectorEngine:
+    eng = engines.get(exchange_id)
+    if not eng:
+        raise HTTPException(404, f"Unknown exchange {exchange_id!r}")
+    return eng
+
+
+@app.post("/api/exchanges/{exchange_id}/start")
+async def api_exchange_start(exchange_id: str):
+    eng = _exchange_engine(exchange_id)
+    await eng.start()
+    return {"ok": True, "status": eng.status()}
+
+
+@app.post("/api/exchanges/{exchange_id}/stop")
+async def api_exchange_stop(exchange_id: str):
+    eng = _exchange_engine(exchange_id)
+    await eng.stop()
+    return {"ok": True, "status": eng.status()}
+
+
+@app.post("/api/exchanges/{exchange_id}/restart")
+async def api_exchange_restart(exchange_id: str):
+    eng = _exchange_engine(exchange_id)
+    await eng.restart()
+    return {"ok": True, "status": eng.status()}
+
+
+@app.post("/api/exchanges/{exchange_id}/simulate")
+async def api_exchange_simulate(exchange_id: str):
+    eng = _exchange_engine(exchange_id)
+    await eng.simulate_listing()
+    return {"ok": True}
+
+
 @app.get("/api/listings")
-async def api_listings():
+async def api_listings(exchange: str | None = None):
     with engine._conn() as db:
-        return [
-            dict(r)
-            for r in db.execute(
-                "SELECT * FROM listings ORDER BY detected_at DESC LIMIT 200"
+        if exchange:
+            rows = db.execute(
+                "SELECT * FROM listings WHERE exchange=? ORDER BY detected_at DESC LIMIT 200",
+                (exchange,),
             )
-        ]
+        else:
+            rows = db.execute("SELECT * FROM listings ORDER BY detected_at DESC LIMIT 200")
+        return [dict(r) for r in rows]
 
 
 @app.get("/api/markets")
-async def api_markets():
+async def api_markets(exchange: str | None = None):
     with engine._conn() as db:
-        return [
-            dict(r)
-            for r in db.execute("SELECT market, ts FROM seen ORDER BY market")
-        ]
+        if exchange:
+            rows = db.execute(
+                "SELECT exchange, market, ts FROM seen WHERE exchange=? ORDER BY market", (exchange,)
+            )
+        else:
+            rows = db.execute("SELECT exchange, market, ts FROM seen ORDER BY exchange, market")
+        return [dict(r) for r in rows]
 
 
 @app.get("/api/notices")
@@ -230,11 +360,59 @@ async def api_logs():
     return list(engine.logs)
 
 
+@app.get("/api/subscribers")
+async def api_subscribers_list():
+    return subs_store.list_subscribers(DB)
+
+
+@app.post("/api/subscribers")
+async def api_subscribers_add(request: Request):
+    body = await request.json()
+    chat_id = str(body.get("chat_id") or "").strip()
+    tier = str(body.get("tier") or "free").strip()
+    if tier not in config.get("subscriber_tiers", CONFIG_DEFAULTS["subscriber_tiers"]):
+        raise HTTPException(400, f"Unknown tier {tier!r}")
+    try:
+        return subs_store.add_subscriber(DB, chat_id, name=str(body.get("name") or ""), tier=tier)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.put("/api/subscribers/{sub_id}")
+async def api_subscribers_update(sub_id: int, request: Request):
+    body = await request.json()
+    fields: dict = {}
+    if "name" in body:
+        fields["name"] = str(body["name"] or "")
+    if "tier" in body:
+        tier = str(body["tier"] or "").strip()
+        if tier not in config.get("subscriber_tiers", CONFIG_DEFAULTS["subscriber_tiers"]):
+            raise HTTPException(400, f"Unknown tier {tier!r}")
+        fields["tier"] = tier
+    if "enabled" in body:
+        fields["enabled"] = 1 if body["enabled"] else 0
+    row = subs_store.update_subscriber(DB, sub_id, **fields)
+    if not row:
+        raise HTTPException(404, f"No subscriber {sub_id}")
+    return row
+
+
+@app.delete("/api/subscribers/{sub_id}")
+async def api_subscribers_delete(sub_id: int):
+    if not subs_store.remove_subscriber(DB, sub_id):
+        raise HTTPException(404, f"No subscriber {sub_id}")
+    return {"ok": True}
+
+
 @app.get("/api/settings")
 async def api_get_settings():
     return {
         "poll_interval": float(config.get("poll_interval", 1.0)),
         "poll_interval_notice": float(config.get("poll_interval_notice", 3.0)),
+        "poll_interval_binance": float(config.get("poll_interval_binance", CONFIG_DEFAULTS["poll_interval_binance"])),
+        "poll_interval_bithumb": float(config.get("poll_interval_bithumb", CONFIG_DEFAULTS["poll_interval_bithumb"])),
+        "poll_interval_coinbase": float(config.get("poll_interval_coinbase", CONFIG_DEFAULTS["poll_interval_coinbase"])),
+        "subscriber_tiers": dict(config.get("subscriber_tiers", CONFIG_DEFAULTS["subscriber_tiers"])),
         "autostart": bool(config.get("autostart", True)),
         "phase0_offsets": list(config.get("phase0_offsets", CONFIG_DEFAULTS["phase0_offsets"])),
         "phase0_sources": dict(config.get("phase0_sources", CONFIG_DEFAULTS["phase0_sources"])),
@@ -246,6 +424,7 @@ async def api_get_settings():
         "telegram_chat_id": telegram.chat_id or "",
         "telegram_token_set": bool(telegram.token),
         "telegram_configured": telegram.configured(),
+        "coinlisting_configured": coinlisting_feed.configured(),
     }
 
 
@@ -264,6 +443,10 @@ async def api_put_settings(request: Request):
     if chat_id:
         telegram.chat_id = chat_id
         persist_env("TELEGRAM_CHAT_ID", chat_id)
+    coinlisting_key = (body.get("coinlisting_api_key") or "").strip()
+    if coinlisting_key:
+        coinlisting_feed.api_key = coinlisting_key
+        persist_env("COINLISTING_API_KEY", coinlisting_key)
     engine.log("info", "Settings updated")
     return await api_get_settings()
 
@@ -285,25 +468,25 @@ async def api_simulate():
 
 @app.get("/api/snapshots/markets")
 async def api_snapshot_markets():
-    """Distinct markets that have Phase 0 snapshots, most-recent first."""
+    """Distinct (exchange, market) pairs that have Phase 0 snapshots, most-recent first."""
     with engine._conn() as db:
         return [
-            r["market"]
+            {"exchange": r["exchange"], "market": r["market"]}
             for r in db.execute(
-                "SELECT market, MAX(ts) AS last_ts FROM snapshots "
-                "GROUP BY market ORDER BY last_ts DESC"
+                "SELECT exchange, market, MAX(ts) AS last_ts FROM snapshots "
+                "GROUP BY exchange, market ORDER BY last_ts DESC"
             )
         ]
 
 
 @app.get("/api/listings/{market}/snapshots")
-async def api_snapshots(market: str):
+async def api_snapshots(market: str, exchange: str = "upbit"):
     with engine._conn() as db:
         return [
             dict(r)
             for r in db.execute(
-                "SELECT source,t_offset,price,ts FROM snapshots WHERE market=? ORDER BY t_offset",
-                (market,),
+                "SELECT source,t_offset,price,ts FROM snapshots WHERE exchange=? AND market=? ORDER BY t_offset",
+                (exchange, market),
             )
         ]
 

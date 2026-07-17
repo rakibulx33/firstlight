@@ -21,7 +21,9 @@ from datetime import datetime, timezone
 
 import aiohttp
 
+import subscribers
 from alerts import alert_allowed
+from broadcast import fanout
 
 ANNOUNCE_URL = (
     "https://api-manager.upbit.com/api/v1/announcements"
@@ -68,6 +70,7 @@ class NoticePoller:
         self.logger = logger          # callable(level, msg)
         self.on_tick = on_tick        # callable() -> push unified status
         self._task: asyncio.Task | None = None
+        self._notify_tasks: set[asyncio.Task] = set()
         self._running = False
         self.last_poll_ts: str | None = None
         self.last_latency_ms: float | None = None
@@ -82,6 +85,15 @@ class NoticePoller:
     def _log(self, level, msg):
         if self.logger:
             self.logger(level, msg)
+
+    def _notify(self, text: str) -> None:
+        """Fire-and-forget broadcast to every enabled subscriber, tiered by delay."""
+        subs = subscribers.list_subscribers(self.db_path)
+        tiers = self.config.get("subscriber_tiers") or {}
+        tasks = fanout(self.notifier, subs, tiers, text, self._log)
+        self._notify_tasks.update(tasks)
+        for t in tasks:
+            t.add_done_callback(self._notify_tasks.discard)
 
     def _conn(self):
         c = sqlite3.connect(self.db_path)
@@ -186,10 +198,7 @@ class NoticePoller:
                         self._log("error", f"Loop B poll error: {e}")
                         if not self._error_alerted and self.notifier and alert_allowed(self.config, "error"):
                             self._error_alerted = True
-                            try:
-                                await self.notifier.send(f"⚠️ Upbit Watch — Loop B error: {e}")
-                            except Exception:  # noqa: BLE001
-                                pass
+                            self._notify(f"⚠️ Upbit Watch — Loop B error: {e}")
                         if self.on_tick:
                             self.on_tick()
                     await asyncio.sleep(self.poll_interval())
@@ -231,9 +240,7 @@ class NoticePoller:
             self.bus.publish({"type": "notice", "data": row})
         if listing and self.notifier and alert_allowed(self.config, "notice"):
             link = f"https://upbit.com/service_center/notice?id={row['id']}"
-            res = await self.notifier.send(
+            self._notify(
                 f"\U0001F4E2 UPBIT LISTING ANNOUNCEMENT: {row['ticker']}\n"
                 f"{row['title']}\n{link}"
             )
-            if not res.get("ok"):
-                self._log("error", f"Telegram announcement alert failed: {res.get('error', res)}")

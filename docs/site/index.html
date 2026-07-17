@@ -77,64 +77,74 @@
           <div class="eyebrow">Localhost control panel</div>
           <h1>Upbit Watch</h1>
           <p>
-            A dark control panel that detects <strong>new Upbit listings</strong> the moment they
-            appear and pings your Telegram. One FastAPI process supervises two independent detection
-            loops plus a price-snapshot logger, streaming everything live to a browser dashboard over
-            WebSocket. Runs natively on Windows for $0 — the same Python code deploys unchanged to a Seoul VPS later.
-            The dashboard is now <strong>fully user-configurable</strong> — detector behaviour, alerts,
-            appearance, and display — with <strong>light / dark / system</strong> themes and accent colours.
+            A dark control panel that detects <strong>new listings across Upbit, Binance, Bithumb, and
+            Coinbase</strong> the moment they appear and fans Telegram alerts out to any number of
+            subscribers. One FastAPI process supervises all four exchange detectors plus Upbit's
+            announcement loop and a price-snapshot logger, streaming everything live to a browser
+            dashboard over WebSocket. Runs natively on Windows for $0 — the same Python code deploys
+            unchanged to a Seoul VPS later. The dashboard is <strong>fully user-configurable</strong> —
+            detector behaviour, alerts, subscriber tiers, appearance, and display — with
+            <strong>light / dark / system</strong> themes and accent colours.
           </p>
           <div class="badges">
             <span class="badge"><b>FastAPI</b> + WebSocket</span>
-            <span class="badge"><b>Loop A</b> markets · 1s</span>
-            <span class="badge"><b>Loop B</b> announcements · 3s</span>
+            <span class="badge"><b>4 exchanges</b> Upbit/Binance/Bithumb/Coinbase</span>
+            <span class="badge"><b>Loop B</b> Upbit announcements · 3s</span>
             <span class="badge"><b>Phase 0</b> price snapshots</span>
+            <span class="badge"><b>Subscribers</b> tiered Telegram fan-out</span>
             <span class="badge"><b>SQLite</b> WAL · survives restarts</span>
-            <span class="badge"><b>Telegram</b> alerts</span>
             <span class="badge"><b>Light / Dark</b> theming + accents</span>
             <span class="badge"><b>Fully configurable</b> · hybrid persistence</span>
           </div>
         </div>
 
         <!-- 1. Overview -->
-        <section class="doc" id="overview" data-title="overview big picture architecture two loops phase 0">
+        <section class="doc" id="overview" data-title="overview big picture architecture exchanges phase 0 subscribers">
           <h2><span class="sec-num">01</span> Overview</h2>
           <p class="lede">What Upbit Watch is and how its pieces fit together.</p>
 
           <p>
-            Upbit Watch is <strong>one FastAPI process</strong> supervising <strong>two independent
-            async detection loops</strong>, with everything pushed live to a browser dashboard over a
-            WebSocket. Two design facts make it reliable:
+            Upbit Watch is <strong>one FastAPI process</strong> supervising <strong>one
+            <code>DetectorEngine</code> per exchange</strong> (Upbit, Binance, Bithumb, Coinbase) plus
+            Upbit's Loop B announcement poller, with everything pushed live to a browser dashboard over
+            a WebSocket and fanned out to Telegram subscribers. Three design facts make it reliable:
           </p>
           <ul>
             <li>
               <strong>Seed-silent + dedup.</strong> On first run each loop records everything that
               <em>already</em> exists and sends nothing. After that it alerts <strong>only</strong> on
-              genuinely new items. The "already seen" set lives in SQLite, so it
+              genuinely new items. The "already seen" set lives in SQLite (keyed per exchange), so it
               <strong>survives restarts</strong> — no false alert storm after a reboot.
             </li>
             <li>
-              <strong>One supervisor, two loops.</strong> Start / Stop / Restart (and autostart) control
-              both loops together; each loop is an independent <code>asyncio.Task</code> whose every poll
-              is wrapped in try/except, so a network blip can never crash the process.
+              <strong>One engine class, four exchanges.</strong> Only the URL, response parser, and poll
+              interval differ per exchange (<code>exchanges.py</code>); the loop/dedup/alert logic is
+              written once. Start / Stop / Restart (and autostart) control all four together, or each
+              independently; every poll is wrapped in try/except, so a network blip can never crash the
+              process.
+            </li>
+            <li>
+              <strong>Non-blocking fan-out.</strong> Each subscriber gets their own delayed
+              <code>asyncio.Task</code> for delivery, so a slow (high-delay-tier) subscriber never
+              blocks detection or other subscribers.
             </li>
           </ul>
 
           <div class="diagram" aria-label="Architecture diagram">
             <div class="flow">
               <div class="flow-row">
-                <div class="node a">Loop A — DetectorEngine <small>Upbit market/all · every 1s</small></div>
+                <div class="node a">DetectorEngine × 4 <small>Upbit / Binance / Bithumb / Coinbase</small></div>
                 <span class="arrow">→</span>
                 <div class="node bus">EventBus <small>async pub/sub</small></div>
                 <span class="arrow">→</span>
                 <div class="fan">
                   <div class="node sink">/ws → Browser dashboard</div>
-                  <div class="node sink">Telegram (notify.py)</div>
+                  <div class="node sink">broadcast.fanout() → Telegram subscribers</div>
                   <div class="node sink">SQLite state.db (WAL)</div>
                 </div>
               </div>
               <div class="flow-row">
-                <div class="node b">Loop B — NoticePoller <small>Upbit announcements · every 3s</small></div>
+                <div class="node b">Loop B — NoticePoller <small>Upbit announcements only · every 3s</small></div>
                 <span class="arrow">↗</span>
               </div>
               <div class="flow-row">
@@ -145,10 +155,10 @@
           </div>
 
           <div class="cards">
-            <div class="fcard"><div class="fic">🎯</div><h4>Loop A — markets</h4><p>Polls the tradable-market list every second. Primary, rock-solid signal.</p></div>
-            <div class="fcard"><div class="fic">📢</div><h4>Loop B — announcements</h4><p>Polls the notice feed every 3s. Early warning — often fires <em>before</em> Loop A.</p></div>
+            <div class="fcard"><div class="fic">🎯</div><h4>4 exchanges</h4><p>Upbit (1s), Binance/Bithumb/Coinbase (5s default) — one generalized engine, independent start/stop.</p></div>
+            <div class="fcard"><div class="fic">📢</div><h4>Loop B — announcements</h4><p>Polls Upbit's notice feed every 3s. Early warning — often fires <em>before</em> the market-list engines.</p></div>
             <div class="fcard"><div class="fic">📈</div><h4>Phase 0 — snapshots</h4><p>Captures price at +0/10/30/60s/5m on Bybit + Binance to measure the pump.</p></div>
-            <div class="fcard"><div class="fic">🖥️</div><h4>Live dashboard</h4><p>Status, feeds, logs, markets table, and chart — all updating over WebSocket.</p></div>
+            <div class="fcard"><div class="fic">📮</div><h4>Subscribers</h4><p>Any number of Telegram recipients, each on a manually-assigned delay tier — no billing.</p></div>
           </div>
         </section>
         <hr class="section-divider" />
